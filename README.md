@@ -78,14 +78,17 @@ export PATH=$HOME/golang/bin:$PATH
 go build -o perisai ./cmd/perisai
 go build -o perisai-setpassword ./cmd/setpassword
 
-# 2. Siapkan config
+# 2. Build dashboard UI (butuh Node >= 20)
+cd ui && npm ci && npm run build && cd ..
+
+# 3. Siapkan config
 cp config.example.yaml config.yaml
 # edit config.yaml: token dashboard, upstream, dsb.
 
-# 3. Atur login dashboard
+# 4. Atur login dashboard
 ./perisai-setpassword --config config.yaml
 
-# 4. Jalankan
+# 5. Jalankan
 ./perisai --config config.yaml
 # proxy  -> :8080 (atau sesuai config)
 # dashboard -> 127.0.0.1:8899
