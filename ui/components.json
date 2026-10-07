@@ -1,0 +1,1 @@
+{"$schema":"https://shadcn-svelte.com/schema.json","aliases":{"$lib":"src/lib","$lib/components":"src/lib/components","$lib/utils":"src/lib/utils"},"iconLibrary":"lucide","style":"new-york","tailwind":{"baseColor":"slate","config":"","css":"src/app.css","cssVariables":true},"typescript":true}
