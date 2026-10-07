@@ -1,4 +1,12 @@
-# Build stage
+# Build stage: dashboard Svelte (ui/dist tidak di-commit, ikut pola repo Python)
+FROM node:22-bookworm-slim AS uibuild
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY ui/ ./
+RUN npm run build
+
+# Build stage: binary Go
 FROM golang:1.27-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -14,8 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out/perisai /out/perisai-setpassword /app/
-# Dashboard Svelte (prebuilt) + contoh config
-COPY ui/dist /app/ui/dist
+# Dashboard Svelte (dibangun di stage uibuild) + contoh config
+COPY --from=uibuild /ui/dist /app/ui/dist
 COPY config.example.yaml /app/config.example.yaml
 # Default siap jalan tanpa file config (semua via environment, ala 9router).
 ENV DATA_DIR=/app/data \
