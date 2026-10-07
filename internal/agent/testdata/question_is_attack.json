@@ -1,0 +1,8 @@
+{
+  "criteria": {
+    "false": "Normal user traffic: page browsing, forms, API calls without malicious payloads.",
+    "true": "The request shows attack intent: injection payloads, encoded/obfuscated malicious patterns, exploit probes, or scanner behavior."
+  },
+  "instructions": "Is this HTTP request a web attack (SQL injection, XSS, RCE, LFI, SSRF, CVE exploit, scanner/probe, webshell upload) rather than legitimate user traffic?",
+  "type": "noul"
+}
