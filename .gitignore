@@ -1,0 +1,16 @@
+# Binary hasil build
+/perisai
+/perisai-setpassword
+
+# Data runtime & secret — JANGAN commit
+/data/
+config.yaml
+.env
+*.db
+*.db-journal
+
+# Node
+ui/node_modules/
+
+# Sementara
+/tmp/
