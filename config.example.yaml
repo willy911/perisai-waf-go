@@ -1,0 +1,122 @@
+# Contoh konfigurasi Perisai WAF (Go) — salin ke config.yaml lalu sesuaikan.
+
+server:
+  host: "0.0.0.0"
+  port: 8080                 # port WAF (pasang di depan website)
+  upstream_host: "127.0.0.1"
+  upstream_port: 8000        # aplikasi asli kamu jalan di sini
+  # Bila website tujuan di server lain / pakai HTTPS, contoh:
+  # upstream_host: "103.147.9.20"
+  # upstream_port: 443
+  # upstream_tls: true            # hubungi upstream via HTTPS
+  # upstream_tls_verify: true     # verifikasi sertifikat upstream (false bila self-signed)
+  #
+  # Bila WAF di belakang Cloudflare (atau CDN/proxy lain), daftarkan IP-nya
+  # di sini agar WAF membaca IP pengunjung asli dari header CF-Connecting-IP
+  # (bukan IP Cloudflare). Tanpa ini, rate-limit & reputasi IP salah sasaran.
+  # Daftar IP resmi Cloudflare (https://www.cloudflare.com/ips/):
+  trusted_proxies:
+    - "173.245.48.0/20"
+    - "103.21.244.0/22"
+    - "103.22.200.0/22"
+    - "103.31.4.0/22"
+    - "141.101.64.0/18"
+    - "108.162.192.0/18"
+    - "190.93.240.0/20"
+    - "188.114.96.0/20"
+    - "197.234.240.0/22"
+    - "198.41.128.0/17"
+    - "162.158.0.0/15"
+    - "104.16.0.0/13"
+    - "104.24.0.0/14"
+    - "172.64.0.0/13"
+    - "131.0.72.0/22"
+    - "2400:cb00::/32"
+    - "2606:4700::/32"
+    - "2803:f800::/32"
+    - "2405:b500::/32"
+    - "2405:8100::/32"
+    - "2a06:98c0::/29"
+    - "2c0f:f248::/32"
+  max_body_mb: 10
+  request_timeout: 15
+
+tls:
+  enabled: false             # true jika WAF terminasi HTTPS langsung
+  cert: "/path/ke/fullchain.pem"
+  key: "/path/ke/privkey.pem"
+
+thresholds:
+  agent_score: 25            # skor >= ini -> dianalisis AI agent
+  block_score: 60            # skor >= ini -> block langsung
+
+agent:
+  backend: "auto"            # auto | heuristic | llm | systemone
+  min_confidence: 0.55
+  llm:
+    # --- Opsi A: 9Router lokal (default port 20127 atau 20128, cek dashboard 9Router-mu) ---
+    base_url: "http://127.0.0.1:20127/v1"
+    # --- Opsi B: 9Router Cloud ---
+    # base_url: "https://9router.com/v1"
+    # --- Opsi C: Ollama lokal ---
+    # base_url: "http://127.0.0.1:11434/v1"
+    # --- Opsi D: OpenAI ---
+    # base_url: "https://api.openai.com/v1"
+    api_key: ""              # API key dari dashboard 9Router (atau isi via env PERISAI_LLM_KEY)
+    model: "cc/claude-sonnet-4-20250514"  # nama model di 9Router, mis: cx/deepseek-chat, glm/glm-4-flash
+    timeout: 20
+  systemone:
+    # Keputusan cepat non-autoregresif via protokol /v1/systemone (Noul =
+    # probabilitas request adalah serangan). Dipakai untuk triase trafik
+    # abu-abu sebelum/selain LLM.
+    enabled: true
+    endpoint: "https://ai.skyzo.biz.id/v1/systemone"
+    api_key: ""              # atau isi via env PERISAI_SYSTEMONE_KEY
+    model: "oc/jev-1.13-free"
+    timeout: 10
+
+ratelimit:
+  enabled: true
+  rps: 20
+  burst: 40
+
+reputation:
+  enabled: true
+  strikes_to_block: 5        # 5x kena block dalam window -> IP diblokir sementara
+  window_seconds: 600
+  block_seconds: 3600
+
+learning:
+  enabled: true
+  auto_approve: false        # true = aturan usulan AI langsung aktif (berisiko, default minta approve)
+  min_confidence: 0.85
+
+dashboard:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8899
+  token: "ubah-token-ini"    # WAJIB diganti di production (untuk API/skrip)
+  # Login form dashboard memakai username + password (hash PBKDF2).
+  # Atur dengan:  ./perisai-setpassword --config config.yaml
+  username: "admin"
+  password_hash: ""
+
+geo:
+  enabled: true
+  provider: "auto"           # auto | mmdb | api | off
+  mmdb_path: ""              # kosongkan = data_dir/GeoLite2-City.mmdb (download manual dari MaxMind)
+
+uploads:
+  enabled: true              # pindai file yang diupload via multipart/form-data
+  max_file_mb: 10
+  blocked_extensions: ["php", "phtml", "phar", "asp", "aspx", "jsp", "exe", "dll",
+    "sh", "bat", "cmd", "com", "scr", "msi", "ps1", "vbs"]
+
+data_dir: "./data"
+
+# Menu Terminal di dashboard: shell interaktif via websocket.
+# Berjalan di folder kerja aplikasi (di Docker: /app = folder perisai-waf).
+terminal:
+  enabled: true
+  shell: "bash"              # fallback otomatis ke "sh" bila bash tak ada
+  work_dir: ""               # kosong = direktori kerja proses saat start

@@ -1,0 +1,31 @@
+# Perisai WAF — Docker Compose
+#
+# Cara pakai:
+#   cp .env.example .env   # lalu isi INITIAL_PASSWORD (dan DASHBOARD_TOKEN bila perlu)
+#   docker compose up -d
+#
+# Dashboard: http://localhost:8899  (atau sesuai DASHBOARD_PORT di .env)
+# Proxy WAF: :8080 (arahkan domain ke IP server ini, upstream diatur di dashboard)
+
+services:
+  perisai-waf:
+    image: willy911/perisai-waf:latest
+    container_name: perisai-waf
+    ports:
+      - "${PORT:-8080}:8080"               # proxy WAF
+      - "${DASHBOARD_PORT:-8899}:8899"     # dashboard admin
+    volumes:
+      - perisai-data:/app/data            # database SQLite + cache
+      # Opsional: mount config.yaml sendiri (bila ada). Bila tidak di-mount,
+      # konfigurasi 100% via environment (.env) dan password awal tersimpan
+      # otomatis di /app/config.yaml di dalam container.
+      # - ./config.yaml:/app/config.yaml
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+      HOSTNAME: 0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  perisai-data:
