@@ -10,6 +10,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -35,8 +36,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/willy911/perisai-waf/internal/agent"
+	"github.com/willy911/perisai-waf/internal/bot"
 	"github.com/willy911/perisai-waf/internal/cache"
 	"github.com/willy911/perisai-waf/internal/config"
+	"github.com/willy911/perisai-waf/internal/geo"
 	"github.com/willy911/perisai-waf/internal/iplists"
 	"github.com/willy911/perisai-waf/internal/learner"
 	"github.com/willy911/perisai-waf/internal/ratelimit"
@@ -225,6 +228,8 @@ type Server struct {
 	rep     *reputation.Reputation
 	lists   *iplists.IPLists
 	pcache  *cache.Cache
+	botDet  *bot.Detector // pertahanan behavioral anti-bot (JA3 + skor)
+	geo     *geo.Geo      // GeoIP untuk geo-blocking per negara
 
 	secret  string
 	trusted []netip.Prefix
@@ -270,6 +275,8 @@ func NewServer(cfg *config.WAFConfig, eng *rules.Engine, orch *agent.Orchestrato
 			s.lists = v
 		case *cache.Cache:
 			s.pcache = v
+		case *geo.Geo:
+			s.geo = v
 		}
 	}
 	if s.limiter == nil {
@@ -284,6 +291,10 @@ func NewServer(cfg *config.WAFConfig, eng *rules.Engine, orch *agent.Orchestrato
 	if s.pcache == nil {
 		s.pcache = cache.New()
 	}
+	if s.geo == nil {
+		s.geo = geo.New(cfg.Geo, cfg.DataDir, store)
+	}
+	s.botDet = bot.NewDetector(cfg.Bot.ChallengeScore, cfg.Bot.BlockScore)
 	for _, c := range cfg.Server.TrustedProxies {
 		if p, ok := parseTrustedCIDR(c); ok {
 			s.trusted = append(s.trusted, p)
@@ -593,6 +604,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// -0b. Geo-blocking per negara (fail-open: negara tak dikenal -> lolos).
+	if cc := s.geoBlockedCountry(clientIP, site); cc != "" {
+		logReq("block", "GEO", 100, 0)
+		s.writeDirect(w, 403,
+			blockPage(reqID, "akses dari negara "+cc+" diblokir."),
+			"text/html; charset=utf-8", nil)
+		return
+	}
+
 	// 0. Reputasi IP (blokir sementara dari riwayat)
 	if s.rep.Check(clientIP) {
 		logReq("block", "REPUTATION", 100, 0)
@@ -603,6 +623,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cookieOK := verifyChallengeToken(s.secret, clientIP, challengeCookie(r))
+
+	// 0c. Deteksi bot behavioral (fingerprint JA3 + sinyal header).
+	//     Fingerprint yang pernah lolos challenge ditandai terpercaya.
+	//     Whitelist sudah bypass di atas; challenge valid tidak di-challenge ulang.
+	if s.botDet != nil && s.cfg.Bot.Enabled && (site == nil || site.BotProtection) {
+		ja3 := ja3Of(r)
+		if cookieOK && ja3 != "" {
+			s.botDet.ChallengePassed(ja3)
+		}
+		if bscore, bsignals, baction := s.botDet.Score(ja3, flatHeaders); baction != "allow" {
+			if baction == "block" {
+				s.rep.RecordBlock(clientIP)
+				logReq("block", "BOT", float64(bscore), 0)
+				s.writeDirect(w, 403,
+					blockPage(reqID, "terdeteksi bot otomatis ("+strings.Join(bsignals, ", ")+")."),
+					"text/html; charset=utf-8", nil)
+				return
+			}
+			if !cookieOK {
+				logReq("challenge", "BOT", float64(bscore), 0)
+				s.issueChallenge(w, r, clientIP)
+				return
+			}
+		}
+	}
 
 	// 0b. Mode Serangan DDoS per-site: challenge-first untuk pengunjung
 	//     baru + rate limit ketat. Whitelist sudah bypass di atas.
@@ -643,6 +688,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 2. Triase rules engine (dengan rule yang dimatikan per-site/global)
 	triage := filterDisabled(req, s.eng.Triage(req),
 		s.disabledFor(site), s.cfg.Thresholds)
+	// Korelasi temuan engine ke fingerprint JA3 untuk penilaian behavioral.
+	if s.botDet != nil && s.cfg.Bot.Enabled {
+		s.botDet.Observe(ja3Of(r), len(triage.Hits) > 0)
+	}
 	score := triage.Score
 	topRule := ""
 	if len(triage.Hits) > 0 {
@@ -747,6 +796,31 @@ func (s *Server) clientIP(r *http.Request) string {
 		}
 	}
 	return peer
+}
+
+// geoBlockedCountry mengembalikan kode negara bila IP berasal dari negara
+// yang diblokir ("" bila tidak diblokir / tak dikenal -> fail-open).
+// Daftar per-site meng-override daftar global.
+func (s *Server) geoBlockedCountry(ip string, site *config.Site) string {
+	var blocked []string
+	if site != nil && len(site.BlockedCountries) > 0 {
+		blocked = site.BlockedCountries
+	} else {
+		blocked = s.cfg.Geo.BlockedCountries
+	}
+	if len(blocked) == 0 || s.geo == nil {
+		return ""
+	}
+	cc := s.geo.CountryCode(ip)
+	if cc == "" {
+		return "" // tak dikenal -> fail-open, jangan blokir
+	}
+	for _, b := range blocked {
+		if strings.EqualFold(strings.TrimSpace(b), cc) {
+			return cc
+		}
+	}
+	return ""
 }
 
 // ddosAllow menerapkan rate limiter ketat per-site untuk Mode Serangan
@@ -1147,6 +1221,42 @@ func (s *Server) ReloadCertificates() {
 	s.certMu.Unlock()
 }
 
+// ctxKeyJA3 adalah kunci context untuk string JA3 koneksi TLS.
+type ctxKeyJA3 struct{}
+
+// ja3Conn membungkus *tls.Conn dengan string JA3 dari ClientHello.
+type ja3Conn struct {
+	*tls.Conn
+	ja3 string
+}
+
+// ja3Listener membungkus net.Listener: setiap Accept me-peek ClientHello
+// untuk menghitung JA3 (pure Go, tanpa dependensi), lalu handshake TLS
+// berjalan normal di atas bytes yang di-replay.
+type ja3Listener struct {
+	net.Listener
+	tlsCfg *tls.Config
+}
+
+func (l *ja3Listener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	// PeekJA3 tidak pernah gagal keras: selalu mengembalikan koneksi yang
+	// bisa dipakai (JA3 boleh kosong bila bukan ClientHello valid).
+	info, replayed, _ := bot.PeekJA3(c)
+	return &ja3Conn{Conn: tls.Server(replayed, l.tlsCfg), ja3: info.JA3}, nil
+}
+
+// ja3Of mengambil string JA3 dari context request ("" bila non-TLS/gagal parse).
+func ja3Of(r *http.Request) string {
+	if v, ok := r.Context().Value(ctxKeyJA3{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // ListenAndServe menjalankan proxy: HTTP biasa, atau HTTPS bila tls.enabled
 // (sertifikat dari cfg.TLS.Cert/Key) dengan SNI per-site.
 func (s *Server) ListenAndServe() error {
@@ -1155,15 +1265,21 @@ func (s *Server) ListenAndServe() error {
 		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if jc, ok := c.(*ja3Conn); ok && jc.ja3 != "" {
+				return context.WithValue(ctx, ctxKeyJA3{}, jc.ja3)
+			}
+			return ctx
+		},
 	}
 	if !s.tlsActive() {
 		return srv.ListenAndServe()
 	}
-	ln, err := tls.Listen("tcp", addr,
-		&tls.Config{GetCertificate: s.getCertificate})
+	tcpLn, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
+	ln := &ja3Listener{Listener: tcpLn, tlsCfg: &tls.Config{GetCertificate: s.getCertificate}}
 	return srv.Serve(ln)
 }
 
@@ -1358,5 +1474,7 @@ func siteFromMap(d map[string]any) *config.Site {
 		CacheBypassCookies: mapList(d, "cache_bypass_cookies"),
 		RecaptchaEnabled:   mapBool(d, "recaptcha_enabled", false),
 		CFZoneID:           mapStr(d, "cf_zone_id", ""),
+		BotProtection:      mapBool(d, "bot_protection", true),
+		BlockedCountries:   mapList(d, "blocked_countries"),
 	}
 }

@@ -64,6 +64,13 @@ type DisabledSync interface {
 	SetRuleDisabled(ruleID string, disabled bool) bool
 }
 
+// SiteReloader diimplementasikan oleh server proxy agar perubahan data
+// site (tambah/ubah/hapus, DDoS, reCAPTCHA, geo-blocking) langsung
+// berlaku tanpa restart.
+type SiteReloader interface {
+	ReloadSites() error
+}
+
 // Dashboard adalah HTTP handler admin: JSON API (token auth) + SPA statis.
 type Dashboard struct {
 	cfg   *config.WAFConfig
@@ -81,6 +88,7 @@ type Dashboard struct {
 	tls   TLSReloader
 
 	disSync DisabledSync
+	siteRel SiteReloader
 
 	mu       sync.Mutex
 	disabled map[string]bool // id rule yang dimatikan (global)
@@ -115,6 +123,8 @@ func New(cfg *config.WAFConfig, store *storage.Storage, orch *agent.Orchestrator
 			d.tls = v
 		case DisabledSync:
 			d.disSync = v
+		case SiteReloader:
+			d.siteRel = v
 		}
 	}
 	if d.ipl == nil {
@@ -248,6 +258,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sites/{id}/ddos", g(d.handleSiteDDoS))
 	mux.HandleFunc("POST /api/sites/{id}/cert", g(d.handleSiteCertUpload))
 	mux.HandleFunc("POST /api/sites/{id}/recaptcha", g(d.handleSiteRecaptcha))
+	mux.HandleFunc("POST /api/sites/{id}/geoblock", g(d.handleSiteGeoBlock))
 	mux.HandleFunc("POST /api/rules/{id}/toggle", g(d.handleRuleToggle))
 	mux.HandleFunc("POST /api/ai-config", g(d.handleAIConfigPost))
 	mux.HandleFunc("POST /api/ai-models", g(d.handleAIModels))
@@ -1363,6 +1374,7 @@ func (d *Dashboard) handleSiteUpsert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	d.reloadSites()
 	writeOK(w, map[string]any{"id": sid})
 }
 
@@ -1428,6 +1440,7 @@ func (d *Dashboard) handleSiteDDoS(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	d.reloadSites()
 	rps := 0.0
 	if f, ok := toFloatE(site["ddos_rps"]); ok {
 		rps = f
@@ -1435,6 +1448,63 @@ func (d *Dashboard) handleSiteDDoS(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{
 		"ddos_mode": pyBool(site["ddos_mode"]), "ddos_rps": rps,
 	})
+}
+
+// reloadSites memuat ulang daftar site di proxy bila tersedia.
+// Error diabaikan (proxy tetap pakai data lama) agar API dashboard
+// tidak gagal hanya karena reload.
+func (d *Dashboard) reloadSites() {
+	if d.siteRel != nil {
+		_ = d.siteRel.ReloadSites()
+	}
+}
+
+// handleSiteGeoBlock: POST /api/sites/{id}/geoblock — atur daftar negara
+// yang diblokir untuk site ini. Body: {"blocked_countries": ["CN","RU"]}
+// atau {"blocked_countries": "CN, RU"}. Kosong -> ikut daftar global.
+func (d *Dashboard) handleSiteGeoBlock(w http.ResponseWriter, r *http.Request) {
+	site, err := d.store.GetSite(r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "site tidak ditemukan")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body, err := readJSON(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	var countries []string
+	switch v := body["blocked_countries"].(type) {
+	case string:
+		countries = []string{}
+		for _, c := range strings.Split(v, ",") {
+			if c = strings.ToUpper(strings.TrimSpace(c)); c != "" {
+				countries = append(countries, c)
+			}
+		}
+	case []any:
+		countries = []string{}
+		for _, x := range v {
+			if c, ok := x.(string); ok {
+				if c = strings.ToUpper(strings.TrimSpace(c)); c != "" {
+					countries = append(countries, c)
+				}
+			}
+		}
+	default:
+		countries = []string{}
+	}
+	site["blocked_countries"] = countries
+	if _, err := d.store.UpsertSite(site); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.reloadSites()
+	writeOK(w, map[string]any{"blocked_countries": countries})
 }
 
 // reloadProxyTLS me-reload sertifikat SNI di proxy. Return
@@ -1599,6 +1669,7 @@ func (d *Dashboard) handleSiteRecaptcha(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	d.reloadSites()
 	writeOK(w, map[string]any{
 		"recaptcha_enabled": pyBool(site["recaptcha_enabled"]),
 	})
