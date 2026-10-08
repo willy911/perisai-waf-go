@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -628,5 +629,130 @@ func TestSiteRoutingFallback(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("host cocok: status=%d, mau 200", resp.StatusCode)
+	}
+}
+
+// TestBotSpoofedUAChallenged: UA mengaku browser tapi JA3 khas tool otomatis
+// -> di-challenge, tidak diteruskan ke upstream.
+func TestBotSpoofedUAChallenged(t *testing.T) {
+	e := newTestEnv(t, func(c *config.WAFConfig) {
+		c.Bot = config.BotConfig{Enabled: true, ChallengeScore: 65, BlockScore: 90}
+	})
+	ja3 := "771,4865-4866,0-23-65281-10-11,29-23,0" // pendek, khas otomatis
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0")
+	req.Header.Set("Accept", "text/html")
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyJA3{}, ja3))
+	rec := httptest.NewRecorder()
+	e.srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 challenge", rec.Code)
+	}
+	if _, _, _, _, _, _, count := e.up.snapshot(); count != 0 {
+		t.Fatalf("request bot sampai ke upstream (%d), harus ditahan", count)
+	}
+	if lr := e.lastRequest(); lr["decision"] != "challenge" {
+		t.Fatalf("decision log = %v, want challenge", lr["decision"])
+	}
+}
+
+// TestBotBrowserNormalDiteruskan: browser asli (JA3 panjang + UA cocok)
+// tidak diganggu deteksi bot.
+func TestBotBrowserNormalDiteruskan(t *testing.T) {
+	e := newTestEnv(t, func(c *config.WAFConfig) {
+		c.Bot = config.BotConfig{Enabled: true, ChallengeScore: 65, BlockScore: 90}
+	})
+	ja3 := "771,4865-4866-4867,0-5-10-11-13-16-18-21-23-27-43-45,29-23-24,0"
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0")
+	req.Header.Set("Accept", "text/html")
+	req.Header.Set("Accept-Language", "id-ID")
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyJA3{}, ja3))
+	rec := httptest.NewRecorder()
+	e.srv.ServeHTTP(rec, req)
+	if _, _, _, _, _, _, count := e.up.snapshot(); count != 1 {
+		t.Fatalf("browser normal tidak sampai upstream (count=%d), status=%d", count, rec.Code)
+	}
+}
+
+// TestGeoBlockCountry: IP dari negara yang diblokir -> 403, tidak ke upstream.
+func TestGeoBlockCountry(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"success","countryCode":"ID"}`))
+	}))
+	defer ts.Close()
+	e := newTestEnv(t, func(c *config.WAFConfig) {
+		c.Geo = config.GeoConfig{Enabled: true, Provider: "api",
+			APIURL: ts.URL, BlockedCountries: []string{"ID"}}
+	})
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:4321" // IP publik agar GeoIP jalan
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	rec := httptest.NewRecorder()
+	e.srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if _, _, _, _, _, _, count := e.up.snapshot(); count != 0 {
+		t.Fatalf("request terblokir sampai ke upstream (%d)", count)
+	}
+	if lr := e.lastRequest(); lr["decision"] != "block" {
+		t.Fatalf("decision log = %v, want block", lr["decision"])
+	}
+}
+
+// TestGeoBlockFailOpen: API GeoIP gagal -> request tetap lolos (fail-open).
+func TestGeoBlockFailOpen(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+	e := newTestEnv(t, func(c *config.WAFConfig) {
+		c.Geo = config.GeoConfig{Enabled: true, Provider: "api",
+			APIURL: ts.URL, BlockedCountries: []string{"ID"}}
+	})
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:4321"
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	rec := httptest.NewRecorder()
+	e.srv.ServeHTTP(rec, req)
+	if _, _, _, _, _, _, count := e.up.snapshot(); count != 1 {
+		t.Fatalf("fail-open rusak: upstream count=%d, want 1 (status=%d)", count, rec.Code)
+	}
+}
+
+// TestGeoBlockPerSiteOverride: daftar per-site mengalahkan daftar global.
+func TestGeoBlockPerSiteOverride(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"success","countryCode":"ID"}`))
+	}))
+	defer ts.Close()
+	e := newTestEnv(t, func(c *config.WAFConfig) {
+		c.Geo = config.GeoConfig{Enabled: true, Provider: "api",
+			APIURL: ts.URL, BlockedCountries: []string{"ID"}}
+	})
+	// Site tanpa override sendiri -> ikut global (ID diblokir).
+	site := &config.Site{ID: "s1", Domain: "example.com", Enabled: true,
+		UpstreamHost: "127.0.0.1", UpstreamPort: e.upPort}
+	e.srv.mu.Lock()
+	e.srv.sites["example.com"] = site
+	e.srv.byID["s1"] = site
+	e.srv.mu.Unlock()
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:4321"
+	rec := httptest.NewRecorder()
+	e.srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("global block: status = %d, want 403", rec.Code)
+	}
+	// Site dengan override kosong... (nil -> ikut global). Override berisi
+	// negara lain -> ID lolos.
+	site.BlockedCountries = []string{"CN"}
+	req2 := httptest.NewRequest("GET", "http://example.com/", nil)
+	req2.RemoteAddr = "8.8.8.8:4321"
+	rec2 := httptest.NewRecorder()
+	e.srv.ServeHTTP(rec2, req2)
+	if _, _, _, _, _, _, count := e.up.snapshot(); count != 1 {
+		t.Fatalf("override per-site: upstream count=%d, want 1", count)
 	}
 }

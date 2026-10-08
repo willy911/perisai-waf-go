@@ -134,6 +134,7 @@ var extraColumns = [][3]string{
 	{"sites", "cache_bypass_cookies", "TEXT DEFAULT '[]'"},
 	{"sites", "recaptcha_enabled", "INTEGER DEFAULT 0"},
 	{"sites", "cf_zone_id", "TEXT DEFAULT ''"},
+	{"sites", "blocked_countries", "TEXT DEFAULT '[]'"},
 }
 
 var lateTables = []string{
@@ -671,8 +672,8 @@ func (s *Storage) UpsertSite(site map[string]any) (string, error) {
 		  ddos_mode, ddos_rps,
 		  cache_enabled, cache_ttl, cache_max_entries,
 		  cache_max_object_kb, cache_bypass_cookies,
-		  recaptcha_enabled, cf_zone_id, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		  recaptcha_enabled, cf_zone_id, blocked_countries, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   domain=excluded.domain, upstream_host=excluded.upstream_host,
 		   upstream_port=excluded.upstream_port,
@@ -691,7 +692,8 @@ func (s *Storage) UpsertSite(site map[string]any) (string, error) {
 		   cache_max_object_kb=excluded.cache_max_object_kb,
 		   cache_bypass_cookies=excluded.cache_bypass_cookies,
 		   recaptcha_enabled=excluded.recaptcha_enabled,
-		   cf_zone_id=excluded.cf_zone_id`,
+		   cf_zone_id=excluded.cf_zone_id,
+		   blocked_countries=excluded.blocked_countries`,
 		sid,
 		domain,
 		toString(site["upstream_host"], "127.0.0.1"),
@@ -714,6 +716,7 @@ func (s *Storage) UpsertSite(site map[string]any) (string, error) {
 		bcookies,
 		boolInt(toBool(site["recaptcha_enabled"], false)),
 		toString(site["cf_zone_id"], ""),
+		jsonListText(site["blocked_countries"], "[]"),
 		float64(time.Now().UnixNano())/1e9,
 	)
 	if err != nil {

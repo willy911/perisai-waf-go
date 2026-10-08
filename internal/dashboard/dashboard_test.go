@@ -1114,3 +1114,48 @@ func TestSiteCertUploadDelete(t *testing.T) {
 		t.Fatalf("harus 404, dapat %d", code)
 	}
 }
+
+func TestSiteGeoBlock(t *testing.T) {
+	s := newTestSetup(t, testHash(t))
+	sid := createSite(t, s)
+	// Set daftar negara via string koma.
+	code, m := s.doJSON(t, "POST", "/api/sites/"+sid+"/geoblock",
+		map[string]any{"blocked_countries": "cn, ru "}, "tok-test")
+	if code != 200 {
+		t.Fatalf("code=%d body=%v", code, m)
+	}
+	mustOK(t, m)
+	got, _ := m["blocked_countries"].([]any)
+	if len(got) != 2 || got[0] != "CN" || got[1] != "RU" {
+		t.Fatalf("blocked_countries = %v, want [CN RU]", m["blocked_countries"])
+	}
+	// Tersimpan di DB dan terbaca kembali.
+	site, err := s.d.store.GetSite(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site["blocked_countries"] != `["CN","RU"]` {
+		t.Fatalf("DB blocked_countries = %v", site["blocked_countries"])
+	}
+	// Via array JSON juga bisa.
+	code, m = s.doJSON(t, "POST", "/api/sites/"+sid+"/geoblock",
+		map[string]any{"blocked_countries": []any{"us"}}, "tok-test")
+	if code != 200 {
+		t.Fatalf("code=%d body=%v", code, m)
+	}
+	// Kosongkan -> kembali ke daftar global (nil).
+	code, m = s.doJSON(t, "POST", "/api/sites/"+sid+"/geoblock",
+		map[string]any{"blocked_countries": ""}, "tok-test")
+	if code != 200 {
+		t.Fatalf("code=%d body=%v", code, m)
+	}
+	if len(m["blocked_countries"].([]any)) != 0 {
+		t.Fatalf("harusnya kosong: %v", m["blocked_countries"])
+	}
+	// Site tak ada -> 404.
+	code, _ = s.doJSON(t, "POST", "/api/sites/takada/geoblock",
+		map[string]any{"blocked_countries": "CN"}, "tok-test")
+	if code != 404 {
+		t.Fatalf("site tak ada harus 404, dapat %d", code)
+	}
+}
