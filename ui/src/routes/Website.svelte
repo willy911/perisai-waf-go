@@ -56,6 +56,13 @@
 	let zoneName = $state("");
 	let zoneSaving = $state(false);
 
+	// dialog geo-blocking
+	let geoOpen = $state(false);
+	let geoSite = $state<Site | null>(null);
+	let geoInput = $state("");
+	let geoSaving = $state(false);
+	let geoMsg = $state("");
+
 	async function load() {
 		try {
 			sites = await apiGet<Site[]>("/api/sites");
@@ -214,6 +221,42 @@
 		}
 	}
 
+	function openGeo(s: Site) {
+		geoSite = s;
+		geoMsg = "";
+		try {
+			const arr = JSON.parse(s.blocked_countries || "[]");
+			geoInput = Array.isArray(arr) ? arr.join(", ") : "";
+		} catch {
+			geoInput = "";
+		}
+		geoOpen = true;
+	}
+
+	async function saveGeo() {
+		if (!geoSite) return;
+		geoSaving = true;
+		geoMsg = "Menyimpan…";
+		try {
+			await apiPost(`/api/sites/${geoSite.id}/geoblock`, { blocked_countries: geoInput });
+			toast("Geo-blocking tersimpan — langsung berlaku");
+			geoOpen = false;
+			await load();
+		} catch (e) {
+			geoMsg = "❌ " + (e instanceof Error ? e.message : "gagal");
+		} finally {
+			geoSaving = false;
+		}
+	}
+
+	function geoLabel(s: Site): string {
+		try {
+			const arr = JSON.parse(s.blocked_countries || "[]");
+			if (Array.isArray(arr) && arr.length > 0) return "🌍 " + arr.join(",");
+		} catch { /* abaikan */ }
+		return "";
+	}
+
 	onMount(load);
 </script>
 
@@ -327,6 +370,14 @@
 									<Button size="sm" variant="outline" onclick={() => openCert(s)}>
 										<KeyRound class="size-3.5" /> SSL
 									</Button>
+									<Button
+										size="sm"
+										variant={geoLabel(s) ? "destructive" : "outline"}
+										onclick={() => openGeo(s)}
+										title="Blokir negara (kode ISO, mis. CN, RU)"
+									>
+										🌍{geoLabel(s) ? " " + geoLabel(s).slice(2) : ""}
+									</Button>
 									<Button size="sm" variant="destructive" onclick={() => delSite(s)}>
 										<Trash2 class="size-3.5" />
 									</Button>
@@ -397,6 +448,31 @@
 		</div>
 		<DialogFooter>
 			<Button onclick={saveZone} disabled={zoneSaving}>{zoneSaving ? "Menyimpan…" : "Simpan"}</Button>
+		</DialogFooter>
+	</DialogContent>
+</Dialog>
+
+<!-- dialog geo-blocking -->
+<Dialog bind:open={geoOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>🌍 Geo-blocking — {geoSite?.domain}</DialogTitle>
+			<DialogDescription>
+				Blokir pengunjung dari negara tertentu (kode ISO 3166-1, mis. CN, RU, US — pisahkan dengan koma).
+				Kosongkan untuk memakai daftar global. Negara yang tidak terdeteksi tidak diblokir (fail-open).
+			</DialogDescription>
+		</DialogHeader>
+		<div class="space-y-3">
+			<div class="space-y-2">
+				<Label for="geo-countries">Negara yang diblokir</Label>
+				<Input id="geo-countries" bind:value={geoInput} placeholder="CN, RU" class="font-mono uppercase" />
+			</div>
+			{#if geoMsg}
+				<p class="text-sm text-muted-foreground">{geoMsg}</p>
+			{/if}
+		</div>
+		<DialogFooter>
+			<Button onclick={saveGeo} disabled={geoSaving}>{geoSaving ? "Menyimpan…" : "Simpan"}</Button>
 		</DialogFooter>
 	</DialogContent>
 </Dialog>

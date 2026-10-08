@@ -1,7 +1,7 @@
 # Perisai WAF — port Go dari implementasi Python.
 #
 # Arsitektur 3 lapis (sama seperti versi Python):
-#  1. Rules engine: 33 signature (SQLi/XSS/RCE/LFI/SSRF/CVE/scanner) + triase skor
+#  1. Rules engine: 34 signature (SQLi/XSS/RCE/LFI/SSRF/CVE/scanner) + triase skor
 #     (allow <25, agent 25-59, block >=60), pindai zona mentah + ter-decode.
 #  2. AI agent untuk trafik abu-abu: backend heuristic, LLM OpenAI-compatible,
 #     atau System One (/v1/systemone, non-autoregresif); mode auto dengan
@@ -110,7 +110,7 @@ cmd/setpassword    CLI atur login dashboard
 internal/
   config           YAML + env + fungsi save
   auth             hash PBKDF2, session 12 jam, anti brute-force
-  rules            33 signature + triase
+  rules            34 signature + triase
   agent            heuristic / llm / systemone + orkestrator
   storage          SQLite (modernc.org/sqlite, pure Go)
   proxy            reverse proxy + pipeline pertahanan

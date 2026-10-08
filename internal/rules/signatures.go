@@ -164,6 +164,15 @@ var builtinRules = []Rule{
 	mustRule("CVE-007", "Java webapp file access", "cve", "high",
 		`/WEB-INF/`, `/META-INF/`,
 		`/(server|context|web|struts)\.xml\b`),
+	// CVE-008: teknik aktual CVE-2026-21589 (watchTowr, 2026-10-07).
+	// atlassian-plugins-webresource.jar mengubah "::" menjadi "/" di routing,
+	// sehingga traversal berbentuk "..::..::..::<dir>::file" lolos dari
+	// pertahanan strip-slash dan TIDAK mengandung "/WEB-INF/" literal —
+	// CVE-007 tidak menangkapnya. "::" ganda di path praktis tidak pernah
+	// muncul di trafik normal (IPv6 pakai bracket di Host, bukan path).
+	mustRule("CVE-008", "Atlassian :: traversal (CVE-2026-21589)", "cve", "high",
+		`\.\.(::|%3a%3a)`, `(::|%3a%3a)\.\.`,
+		`/(WEB-INF|META-INF)(::|%3a%3a)`),
 
 	// ---------------- Scanner / bot jahat ----------------
 	mustRule("SCAN-001", "Known scanner UA", "scanner", "high",

@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,17 +47,34 @@ type Geo struct {
 	// seperti make_resolver di Python yang menelan error buka file.
 	mmdbOnce   sync.Once
 	mmdbReader *maxminddb.Reader
+
+	// ccCache adalah cache in-memory kode negara dari API (hemat kuota
+	// ip-api.com yang rate-limited); entri kedaluwarsa setelah ccTTL.
+	ccMu    sync.Mutex
+	ccCache map[string]ccEntry
 }
+
+type ccEntry struct {
+	code    string
+	expires time.Time
+}
+
+const ccTTL = time.Hour
 
 // New membuat resolver GeoIP dari config, data dir, dan storage cache.
 func New(cfg config.GeoConfig, dataDir string, store *storage.Storage) *Geo {
-	return &Geo{
+	g := &Geo{
 		cfg:        cfg,
 		dataDir:    dataDir,
 		store:      store,
 		apiBaseURL: defaultAPIURL,
 		client:     &http.Client{Timeout: apiTimeout},
+		ccCache:    make(map[string]ccEntry),
 	}
+	if cfg.APIURL != "" {
+		g.apiBaseURL = cfg.APIURL
+	}
+	return g
 }
 
 // Lookup mengembalikan country, city, lat, lon untuk sebuah IP.
@@ -143,12 +161,93 @@ type mmdbCity struct {
 		Names map[string]string `maxminddb:"names"`
 	} `maxminddb:"city"`
 	Country struct {
-		Names map[string]string `maxminddb:"names"`
+		Names   map[string]string `maxminddb:"names"`
+		ISOCode string            `maxminddb:"iso_code"`
 	} `maxminddb:"country"`
 	Location struct {
 		Latitude  *float64 `maxminddb:"latitude"`
 		Longitude *float64 `maxminddb:"longitude"`
 	} `maxminddb:"location"`
+}
+
+// CountryCode mengembalikan kode negara ISO 3166-1 alpha-2 (uppercase,
+// mis. "ID") untuk sebuah IP, atau "" bila tidak diketahui / fitur mati.
+// Dipakai untuk geo-blocking: "" berarti fail-open (jangan blokir).
+func (g *Geo) CountryCode(ip string) string {
+	if !g.cfg.Enabled || g.cfg.Provider == "off" {
+		return ""
+	}
+	if !isPublic(ip) {
+		return ""
+	}
+	if code := g.countryCodeMMDB(ip); code != "" {
+		return code
+	}
+	if g.cfg.Provider == "mmdb" {
+		return ""
+	}
+	return g.countryCodeAPI(ip)
+}
+
+// countryCodeMMDB mengambil ISO code dari file MMDB lokal (bila ada).
+func (g *Geo) countryCodeMMDB(ip string) string {
+	mmdb := g.cfg.MMDBPath
+	if mmdb == "" {
+		mmdb = filepath.Join(g.dataDir, "GeoLite2-City.mmdb")
+	}
+	if !(g.cfg.Provider == "auto" || g.cfg.Provider == "mmdb") || !fileExists(mmdb) {
+		return ""
+	}
+	r := g.openMMDB()
+	if r == nil {
+		return ""
+	}
+	var rec mmdbCity
+	if err := r.Lookup(net.ParseIP(ip), &rec); err != nil {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(rec.Country.ISOCode))
+}
+
+// countryCodeAPI mengambil ISO code via API (dengan cache in-memory 1 jam).
+func (g *Geo) countryCodeAPI(ip string) string {
+	g.ccMu.Lock()
+	if e, ok := g.ccCache[ip]; ok && time.Now().Before(e.expires) {
+		code := e.code
+		g.ccMu.Unlock()
+		return code
+	}
+	g.ccMu.Unlock()
+
+	code := ""
+	url := g.apiBaseURL + "/" + ip + "?fields=status,countryCode"
+	resp, err := g.client.Get(url)
+	if err == nil {
+		defer resp.Body.Close()
+		var ar struct {
+			Status      string `json:"status"`
+			CountryCode string `json:"countryCode"`
+		}
+		if body, err := io.ReadAll(io.LimitReader(resp.Body, 4096)); err == nil {
+			if json.Unmarshal(body, &ar) == nil && ar.Status == "success" {
+				code = strings.ToUpper(strings.TrimSpace(ar.CountryCode))
+			}
+		}
+	}
+	// Cache juga hasil kosong (negatif) agar IP tak dikenal tidak
+	// menghantam API berulang-ulang.
+	g.ccMu.Lock()
+	g.ccCache[ip] = ccEntry{code: code, expires: time.Now().Add(ccTTL)}
+	// Batasi ukuran cache oportunistik.
+	if len(g.ccCache) > 10000 {
+		for k, e := range g.ccCache {
+			if time.Now().After(e.expires) {
+				delete(g.ccCache, k)
+			}
+		}
+	}
+	g.ccMu.Unlock()
+	return code
 }
 
 // mmdbName mengambil nama dengan locale "en" dulu (default geoip2 Python),

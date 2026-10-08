@@ -93,7 +93,7 @@ func main() {
 	pcache := cache.New()
 	geoInst := geo.New(cfg.Geo, cfg.DataDir, store)
 
-	proxySrv := proxy.NewServer(cfg, eng, orch, store, limiter, rep, lists, pcache)
+	proxySrv := proxy.NewServer(cfg, eng, orch, store, limiter, rep, lists, pcache, geoInst)
 
 	// SPA dashboard dari direktori (seperti Python); nil bila tak ada.
 	var spaFS fs.FS

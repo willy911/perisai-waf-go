@@ -3,6 +3,7 @@ package geo
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -178,5 +179,42 @@ func TestMMDBProviderWithoutFileReturnsEmpty(t *testing.T) {
 	c, ci, la, lo := g.Lookup("8.8.8.8")
 	if c != "" || ci != "" || la != 0 || lo != 0 {
 		t.Errorf("dapat (%q,%q,%v,%v), ingin kosong", c, ci, la, lo)
+	}
+}
+
+func TestCountryCodeAPI(t *testing.T) {
+	var hits int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if !strings.Contains(r.URL.RawQuery, "countryCode") {
+			t.Errorf("query harus meminta countryCode: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","countryCode":"id"}`))
+	}))
+	defer ts.Close()
+
+	g := New(config.GeoConfig{Enabled: true, Provider: "api", APIURL: ts.URL}, t.TempDir(), nil)
+	g.client = ts.Client()
+
+	if got := g.CountryCode("8.8.8.8"); got != "ID" {
+		t.Fatalf("CountryCode = %q, want ID", got)
+	}
+	// Panggilan kedua harus dari cache (tidak hit API lagi).
+	if got := g.CountryCode("8.8.8.8"); got != "ID" {
+		t.Fatalf("CountryCode(2) = %q, want ID", got)
+	}
+	if hits != 1 {
+		t.Fatalf("API di-hit %d kali, want 1 (cache)", hits)
+	}
+}
+
+func TestCountryCodeFailOpen(t *testing.T) {
+	g := New(config.GeoConfig{Enabled: true, Provider: "off"}, t.TempDir(), nil)
+	if got := g.CountryCode("8.8.8.8"); got != "" {
+		t.Fatalf("provider off harus \"\", dapat %q", got)
+	}
+	g2 := New(config.GeoConfig{Enabled: true, Provider: "api"}, t.TempDir(), nil)
+	if got := g2.CountryCode("192.168.1.1"); got != "" {
+		t.Fatalf("IP privat harus \"\", dapat %q", got)
 	}
 }

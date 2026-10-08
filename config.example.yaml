@@ -51,7 +51,7 @@ thresholds:
   block_score: 60            # skor >= ini -> block langsung
 
 agent:
-  backend: "auto"            # auto | heuristic | llm | systemone
+  backend: "systemone"       # auto | heuristic | llm | systemone (default: systemone)
   min_confidence: 0.55
   llm:
     # --- Opsi A: 9Router lokal (default port 20127 atau 20128, cek dashboard 9Router-mu) ---
@@ -80,6 +80,13 @@ ratelimit:
   rps: 20
   burst: 40
 
+# Pertahanan behavioral anti-bot: fingerprint TLS/JA3 + skor perilaku HTTP
+# (terinspirasi SafeLine). Challenge untuk skor tinggi, block untuk sangat tinggi.
+bot:
+  enabled: true
+  challenge_score: 65
+  block_score: 90
+
 reputation:
   enabled: true
   strikes_to_block: 5        # 5x kena block dalam window -> IP diblokir sementara
@@ -105,6 +112,10 @@ geo:
   enabled: true
   provider: "auto"           # auto | mmdb | api | off
   mmdb_path: ""              # kosongkan = data_dir/GeoLite2-City.mmdb (download manual dari MaxMind)
+  # api_url: "http://ip-api.com/json"  # override endpoint GeoIP bila perlu
+  # Daftar negara yang diblokir global (kode ISO, mis. CN); bisa di-override
+  # per-site lewat dashboard (tombol 🌍). Kosong = tidak ada blokir negara.
+  blocked_countries: []
 
 uploads:
   enabled: true              # pindai file yang diupload via multipart/form-data

@@ -60,6 +60,14 @@ type RateLimitConfig struct {
 	Burst   int     `yaml:"burst"`
 }
 
+// BotConfig: pertahanan behavioral anti-bot (fingerprint TLS/JA3 + skor
+// perilaku HTTP). Terinspirasi fitur anti-bot proaktif SafeLine.
+type BotConfig struct {
+	Enabled        bool `yaml:"enabled"`
+	ChallengeScore int  `yaml:"challenge_score"` // skor >= ini -> challenge
+	BlockScore     int  `yaml:"block_score"`     // skor >= ini -> block
+}
+
 type ReputationConfig struct {
 	Enabled        bool `yaml:"enabled"`
 	StrikesToBlock int  `yaml:"strikes_to_block"`
@@ -97,6 +105,10 @@ type GeoConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Provider string `yaml:"provider"` // auto | mmdb | api | off
 	MMDBPath string `yaml:"mmdb_path"`
+	APIURL   string `yaml:"api_url"` // override endpoint GeoIP (default ip-api.com)
+	// BlockedCountries: daftar kode negara ISO (["CN","RU"]) yang
+	// diblokir global; bisa di-override per-site.
+	BlockedCountries []string `yaml:"blocked_countries"`
 }
 
 // TerminalConfig mengatur menu Terminal di dashboard: shell interaktif
@@ -137,6 +149,10 @@ type Site struct {
 	CacheBypassCookies []string `yaml:"cache_bypass_cookies"`
 	RecaptchaEnabled   bool     `yaml:"recaptcha_enabled"`
 	CFZoneID           string   `yaml:"cf_zone_id"`
+	BotProtection      bool     `yaml:"bot_protection"`
+	// BlockedCountries: kode negara ISO yang diblokir untuk site ini;
+	// kosong/nil -> pakai daftar global geo.blocked_countries.
+	BlockedCountries []string `yaml:"blocked_countries"`
 }
 
 type WAFConfig struct {
@@ -144,6 +160,7 @@ type WAFConfig struct {
 	TLS        TLSConfig        `yaml:"tls"`
 	Thresholds Thresholds       `yaml:"thresholds"`
 	Agent      AgentConfig      `yaml:"agent"`
+	Bot        BotConfig        `yaml:"bot"`
 	RateLimit  RateLimitConfig  `yaml:"ratelimit"`
 	Reputation ReputationConfig `yaml:"reputation"`
 	Learning   LearningConfig   `yaml:"learning"`
@@ -167,10 +184,11 @@ func defaultConfig() *WAFConfig {
 		},
 		Thresholds: Thresholds{AgentScore: 25, BlockScore: 60},
 		Agent: AgentConfig{
-			Backend: "auto", MinConfidence: 0.55,
+			Backend: "systemone", MinConfidence: 0.55,
 			LLM:       LLMConfig{BaseURL: "http://127.0.0.1:11434/v1", Model: "llama3.1", Timeout: 20},
 			SystemOne: SystemOneConfig{Enabled: true, Endpoint: "https://ai.skyzo.biz.id/v1/systemone", Model: "oc/jev-1.13-free", Timeout: 10},
 		},
+		Bot:        BotConfig{Enabled: true, ChallengeScore: 65, BlockScore: 90},
 		RateLimit:  RateLimitConfig{Enabled: true, RPS: 20, Burst: 40},
 		Reputation: ReputationConfig{Enabled: true, StrikesToBlock: 5, WindowSeconds: 600, BlockSeconds: 3600},
 		Learning:   LearningConfig{Enabled: true, MinConfidence: 0.85},

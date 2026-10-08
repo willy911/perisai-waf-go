@@ -60,8 +60,8 @@ func mustRuleT(t *testing.T, id, name, category, severity string, patterns ...st
 
 func TestJumlahRuleBawaan(t *testing.T) {
 	e := testEngine()
-	if len(e.Rules()) != 33 {
-		t.Fatalf("rule bawaan = %d, mau 33", len(e.Rules()))
+	if len(e.Rules()) != 34 {
+		t.Fatalf("rule bawaan = %d, mau 34", len(e.Rules()))
 	}
 	ids := map[string]bool{}
 	for _, r := range e.Rules() {
@@ -313,6 +313,41 @@ func TestCVE007JavaWebinfProbes(t *testing.T) {
 	}
 }
 
+func TestCVE008DoubleColonTraversal(t *testing.T) {
+	// CVE-2026-21589, teknik aktual per laporan watchTowr 2026-10-07:
+	// atlassian-plugins-webresource.jar mengubah "::" jadi "/" di routing,
+	// sehingga payload "..::..::..::<dir>::file" tidak mengandung
+	// "/WEB-INF/" literal dan lolos dari CVE-007 (allow skor 0).
+	e := testEngine()
+	payloads := []string{
+		"/plugins/servlet/colorpicker/..::..::..::WEB-INF::web.xml",
+		"/rest/api/2/..::..::..::WEB-INF::classes/crowd.properties",
+		"/confluence/s/abc/_/..::..::..::META-INF::MANIFEST.MF",
+		"/jira/secure/..::..::..::WEB-INF/web.xml",
+	}
+	for _, p := range payloads {
+		r := e.Triage(req(p, "", nil, nil, ""))
+		if r.Action != "agent" {
+			t.Fatalf("%s: action=%s, mau agent", p, r.Action)
+		}
+		if !hitSet(r.Hits)["CVE-008"] {
+			t.Fatalf("%s: CVE-008 tidak kena", p)
+		}
+	}
+	// varian ter-encode (%3a = ':') tetap kena via zona multi-decode
+	r := e.Triage(req("/x/..%3a%3a..%3a%3aWEB-INF%3a%3aweb.xml", "", nil, nil, ""))
+	if !hitSet(r.Hits)["CVE-008"] {
+		t.Fatal("CVE-008 tidak kena varian %3a%3a")
+	}
+	// negatif: path normal tidak boleh kena
+	for _, p := range []string{"/", "/api/v1/orders", "/download/file.zip"} {
+		r := e.Triage(req(p, "", nil, nil, ""))
+		if hitSet(r.Hits)["CVE-008"] {
+			t.Fatalf("%s: CVE-008 false positive", p)
+		}
+	}
+}
+
 func TestSSRFMetadata(t *testing.T) {
 	e := testEngine()
 	r := e.Triage(req("/fetch", "url=http://169.254.169.254/latest/meta-data", nil, nil, ""))
@@ -485,8 +520,8 @@ func TestCustomRuleMasukKeEngine(t *testing.T) {
 	// Custom rule dari learner ikut dipindai setelah rule bawaan.
 	custom := mustRuleT(t, "C1", "custom probe", "anomaly", "medium", `kue-lapis-legit`)
 	e := testEngineCustom(custom)
-	if len(e.Rules()) != 34 {
-		t.Fatalf("jumlah rule = %d, mau 34 (33 bawaan + 1 custom)", len(e.Rules()))
+	if len(e.Rules()) != 35 {
+		t.Fatalf("jumlah rule = %d, mau 35 (34 bawaan + 1 custom)", len(e.Rules()))
 	}
 	r := e.Triage(req("/toko", "menu=kue-lapis-legit", nil, nil, ""))
 	if !hitSet(r.Hits)["C1"] {
