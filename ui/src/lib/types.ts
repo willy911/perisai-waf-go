@@ -84,6 +84,9 @@ export interface Site {
 	tls_expires_at: number;
 	requests_24h?: number;
 	recaptcha_enabled?: number | boolean;
+	auth_challenge_enabled?: number | boolean;
+	auth_challenge_set?: boolean;
+	dynamic_protection?: number | boolean;
 	blocked_countries?: string;
 }
 

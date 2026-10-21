@@ -10,6 +10,7 @@
 		CfConfig,
 		CfStats,
 		Site,
+		AttackPoint,
 	} from "$lib/types.js";
 	import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "$lib/components/ui/card/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
@@ -35,6 +36,7 @@
 	let cfStats = $state<CfStats | null>(null);
 	let cfStatsErr = $state("");
 	let sites = $state<Site[]>([]);
+	let attackPoints = $state<AttackPoint[]>([]);
 	let cfSiteId = $state("");
 	let cfToken = $state("");
 	let cfSaving = $state(false);
@@ -51,6 +53,11 @@
 			agentRuns = a;
 		} catch (e) {
 			toast("Gagal memuat statistik", { variant: "destructive" });
+		}
+		try {
+			attackPoints = await apiGet<AttackPoint[]>("/api/attack-map?hours=24");
+		} catch {
+			attackPoints = [];
 		}
 		try {
 			const [cfg, st] = await Promise.all([
@@ -116,29 +123,94 @@
 	});
 
 	let d = $derived(stats?.by_decision ?? {});
+
+	// Angka ringkas ala SafeLine (27.0k).
+	const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+	function fmtK(n: number | undefined): string {
+		return n === undefined ? "…" : compact.format(n);
+	}
+
+	let uniqIPs = $derived(new Set(requests.map((r) => r.ip)).size);
+	let countries = $derived.by(() => {
+		const byCountry = new Map<string, number>();
+		for (const p of attackPoints) {
+			byCountry.set(p.country || "?", (byCountry.get(p.country || "?") ?? 0) + p.count);
+		}
+		return [...byCountry.entries()]
+			.map(([country, count]) => ({ country, count }))
+			.sort((a, b) => b.count - a.count)
+			.slice(0, 8);
+	});
+	let countryMax = $derived(Math.max(1, ...countries.map((c) => c.count)));
 </script>
 
 <div class="space-y-6">
-	<div>
-		<h1 class="text-2xl font-bold">Dashboard</h1>
-		<p class="text-sm text-muted-foreground">Ringkasan proteksi 24 jam terakhir</p>
+	<div class="flex flex-wrap items-end justify-between gap-3">
+		<div>
+			<h1 class="text-2xl font-extrabold tracking-tight">Dashboard</h1>
+			<p class="text-sm text-muted-foreground">Ringkasan proteksi 24 jam terakhir</p>
+		</div>
+		<div class="flex items-center gap-2">
+			<span class="rounded-lg bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground shadow-md shadow-primary/25">24 JAM</span>
+			<span class="cursor-not-allowed rounded-lg bg-card px-3.5 py-1.5 text-xs font-bold text-muted-foreground opacity-60 shadow-sm" title="Belum tersedia">7 HARI</span>
+			<span class="cursor-not-allowed rounded-lg bg-card px-3.5 py-1.5 text-xs font-bold text-muted-foreground opacity-60 shadow-sm" title="Belum tersedia">30 HARI</span>
+		</div>
 	</div>
 
-	<!-- kartu statistik -->
-	<div class="grid grid-cols-2 gap-4 md:grid-cols-5">
-		<Card><CardContent class="pt-6"><div class="text-3xl font-bold">{stats?.total ?? "…"}</div><div class="mt-1 text-xs text-muted-foreground">Request (24 jam)</div></CardContent></Card>
-		<Card><CardContent class="pt-6"><div class="text-3xl font-bold text-green-400">{stats ? (d.allow ?? 0) : "…"}</div><div class="mt-1 text-xs text-muted-foreground">Allow</div></CardContent></Card>
-		<Card><CardContent class="pt-6"><div class="text-3xl font-bold text-amber-400">{(d.challenge ?? 0) + (d.cache_hit ?? 0) > 0 ? (d.challenge ?? 0) + (d.cache_hit ?? 0) : (stats ? 0 : "…")}</div><div class="mt-1 text-xs text-muted-foreground">Challenge</div></CardContent></Card>
-		<Card><CardContent class="pt-6"><div class="text-3xl font-bold text-red-400">{(d.block ?? 0) + (d.rate_limited ?? 0) > 0 ? (d.block ?? 0) + (d.rate_limited ?? 0) : (stats ? 0 : "…")}</div><div class="mt-1 text-xs text-muted-foreground">Block</div></CardContent></Card>
-		<Card><CardContent class="pt-6"><div class="text-3xl font-bold">{stats?.rules_loaded ?? "…"}</div><div class="mt-1 text-xs text-muted-foreground">Signature aktif</div></CardContent></Card>
+	<!-- kartu statistik berkelompok ala SafeLine -->
+	<div class="grid gap-4 lg:grid-cols-3">
+		<Card>
+			<CardContent class="grid grid-cols-3 divide-x divide-border px-2 py-5">
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-primary"></span>Total Request</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(stats?.total)}</div>
+				</div>
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-emerald-500"></span>Allow</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(d.allow)}</div>
+				</div>
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-sky-500"></span>IP Unik</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(uniqIPs)}</div>
+				</div>
+			</CardContent>
+		</Card>
+		<Card>
+			<CardContent class="grid grid-cols-3 divide-x divide-border px-2 py-5">
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-rose-500"></span>Block</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(d.block)}</div>
+				</div>
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-amber-500"></span>Challenge</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(d.challenge)}</div>
+				</div>
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-orange-500"></span>Rate Limited</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(d.rate_limited)}</div>
+				</div>
+			</CardContent>
+		</Card>
+		<Card>
+			<CardContent class="grid grid-cols-3 divide-x divide-border px-2 py-5">
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-violet-500"></span>Signature Aktif</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(stats?.rules_loaded)}</div>
+				</div>
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-teal-500"></span>Cache Hit</div>
+					<div class="mt-1.5 text-[26px] font-extrabold leading-none">{fmtK(d.cache_hit)}</div>
+				</div>
+				<div class="px-4">
+					<div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2 rounded-full bg-red-500"></span>Top Offender</div>
+					<div class="mt-1.5 truncate text-[15px] font-extrabold leading-none" title={stats?.top_offenders?.[0]?.ip ?? ""}>
+						{stats?.top_offenders?.[0] ? `${stats.top_offenders[0].count}x` : "—"}
+					</div>
+					<div class="mt-1 truncate text-[11px] text-muted-foreground">{stats?.top_offenders?.[0]?.ip ?? "belum ada"}</div>
+				</div>
+			</CardContent>
+		</Card>
 	</div>
-
-	{#if stats?.top_offenders?.length}
-		<p class="text-sm text-muted-foreground">
-			Top offender: <code class="rounded bg-input px-1">{stats.top_offenders[0].ip}</code>
-			({stats.top_offenders[0].count}x)
-		</p>
-	{/if}
 
 	<!-- panel Cloudflare -->
 	<Card>
@@ -195,8 +267,8 @@
 					{:else if cfStats}
 						<div class="grid grid-cols-2 gap-4 md:grid-cols-4">
 							<div><div class="text-2xl font-bold">{cfStats.requests.toLocaleString("id-ID")}</div><div class="text-xs text-muted-foreground">Request</div></div>
-							<div><div class="text-2xl font-bold text-red-400">{cfStats.threats.toLocaleString("id-ID")}</div><div class="text-xs text-muted-foreground">Threats</div></div>
-							<div><div class="text-2xl font-bold text-green-400">{cfStats.cached_pct}%</div><div class="text-xs text-muted-foreground">Cached</div></div>
+							<div><div class="text-2xl font-bold text-rose-500">{cfStats.threats.toLocaleString("id-ID")}</div><div class="text-xs text-muted-foreground">Threats</div></div>
+							<div><div class="text-2xl font-bold text-emerald-600">{cfStats.cached_pct}%</div><div class="text-xs text-muted-foreground">Cached</div></div>
 							<div><div class="text-2xl font-bold">{fmtBytes(cfStats.bandwidth)}</div><div class="text-xs text-muted-foreground">Bandwidth</div></div>
 						</div>
 						<p class="text-xs text-muted-foreground">Diperbarui: {fmtTime(cfStats.updated_at)}</p>
@@ -208,7 +280,32 @@
 		</CardContent>
 	</Card>
 
-	<TrendChart {requests} />
+	<div class="grid items-start gap-4 lg:grid-cols-3">
+		<div class="lg:col-span-2">
+			<TrendChart {requests} />
+		</div>
+		<Card>
+			<CardHeader>
+				<CardTitle>Negara Asal Serangan</CardTitle>
+				<CardDescription>Serangan terblokir per negara (24 jam)</CardDescription>
+			</CardHeader>
+			<CardContent class="space-y-3.5">
+				{#each countries as c (c.country)}
+					<div>
+						<div class="mb-1 flex items-baseline justify-between text-sm">
+							<span class="truncate">{c.country}</span>
+							<span class="font-bold">{fmtK(c.count)}</span>
+						</div>
+						<div class="h-1.5 overflow-hidden rounded-full bg-muted">
+							<div class="h-full rounded-full bg-primary" style="width: {Math.max(3, (c.count / countryMax) * 100)}%"></div>
+						</div>
+					</div>
+				{:else}
+					<p class="text-sm text-muted-foreground">Belum ada data geo serangan.</p>
+				{/each}
+			</CardContent>
+		</Card>
+	</div>
 
 	<AttackMap />
 

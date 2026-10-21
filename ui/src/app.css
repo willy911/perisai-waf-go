@@ -1,26 +1,28 @@
 @import "tailwindcss";
 
+/* Tema terang ala SafeLine (fase 2): latar abu muda, kartu putih,
+   primer teal/toska, radius besar, label abu lembut. */
 :root {
-	--background: #0f172a;
-	--foreground: #e2e8f0;
-	--card: #1e293b;
-	--card-foreground: #e2e8f0;
-	--popover: #1e293b;
-	--popover-foreground: #e2e8f0;
-	--primary: #6366f1;
+	--background: #f3f5f8;
+	--foreground: #1c2430;
+	--card: #ffffff;
+	--card-foreground: #1c2430;
+	--popover: #ffffff;
+	--popover-foreground: #1c2430;
+	--primary: #0fb9a8;
 	--primary-foreground: #ffffff;
-	--secondary: #334155;
-	--secondary-foreground: #e2e8f0;
-	--muted: #1e293b;
-	--muted-foreground: #94a3b8;
-	--accent: #334155;
-	--accent-foreground: #e2e8f0;
-	--destructive: #ef4444;
+	--secondary: #edf1f5;
+	--secondary-foreground: #3c4656;
+	--muted: #edf1f5;
+	--muted-foreground: #8492a6;
+	--accent: #e7f6f3;
+	--accent-foreground: #0a8f83;
+	--destructive: #f43f5e;
 	--destructive-foreground: #ffffff;
-	--border: #334155;
-	--input: #0b1220;
-	--ring: #6366f1;
-	--radius: 0.625rem;
+	--border: #e3e8ef;
+	--input: #eef1f6;
+	--ring: #0fb9a8;
+	--radius: 0.75rem;
 }
 
 @theme inline {
@@ -46,6 +48,8 @@
 	--radius-lg: var(--radius);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-sm: calc(var(--radius) - 4px);
+	--radius-xl: 1rem;
+	--radius-2xl: 1.25rem;
 }
 
 @layer base {
@@ -55,19 +59,25 @@
 	body {
 		background-color: var(--background);
 		color: var(--foreground);
-		font-family: system-ui, -apple-system, sans-serif;
+		font-family:
+			"Nunito", ui-rounded, system-ui, -apple-system, "Segoe UI", sans-serif;
 	}
 }
 
-/* scrollbar gelap */
+/* scrollbar terang */
 ::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;
 }
 ::-webkit-scrollbar-track {
-	background: #0b1220;
+	background: #edf1f5;
 }
 ::-webkit-scrollbar-thumb {
-	background: #334155;
+	background: #c3cedd;
 	border-radius: 5px;
+}
+
+/* Tabel ala SafeLine: pita header abu sangat muda */
+[data-slot="table-header"] {
+	background-color: #f7f9fb;
 }

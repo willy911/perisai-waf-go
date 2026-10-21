@@ -133,6 +133,9 @@ var extraColumns = [][3]string{
 	{"sites", "cache_max_object_kb", "INTEGER DEFAULT 2048"},
 	{"sites", "cache_bypass_cookies", "TEXT DEFAULT '[]'"},
 	{"sites", "recaptcha_enabled", "INTEGER DEFAULT 0"},
+	{"sites", "auth_challenge_enabled", "INTEGER DEFAULT 0"},
+	{"sites", "auth_challenge_hash", "TEXT DEFAULT ''"},
+	{"sites", "dynamic_protection", "INTEGER DEFAULT 0"},
 	{"sites", "cf_zone_id", "TEXT DEFAULT ''"},
 	{"sites", "blocked_countries", "TEXT DEFAULT '[]'"},
 	{"requests", "headers", "TEXT DEFAULT ''"},
@@ -686,8 +689,10 @@ func (s *Storage) UpsertSite(site map[string]any) (string, error) {
 		  ddos_mode, ddos_rps,
 		  cache_enabled, cache_ttl, cache_max_entries,
 		  cache_max_object_kb, cache_bypass_cookies,
-		  recaptcha_enabled, cf_zone_id, blocked_countries, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		  recaptcha_enabled, auth_challenge_enabled, auth_challenge_hash,
+		  dynamic_protection,
+		  cf_zone_id, blocked_countries, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   domain=excluded.domain, upstream_host=excluded.upstream_host,
 		   upstream_port=excluded.upstream_port,
@@ -706,6 +711,9 @@ func (s *Storage) UpsertSite(site map[string]any) (string, error) {
 		   cache_max_object_kb=excluded.cache_max_object_kb,
 		   cache_bypass_cookies=excluded.cache_bypass_cookies,
 		   recaptcha_enabled=excluded.recaptcha_enabled,
+		   auth_challenge_enabled=excluded.auth_challenge_enabled,
+		   auth_challenge_hash=excluded.auth_challenge_hash,
+		   dynamic_protection=excluded.dynamic_protection,
 		   cf_zone_id=excluded.cf_zone_id,
 		   blocked_countries=excluded.blocked_countries`,
 		sid,
@@ -729,6 +737,9 @@ func (s *Storage) UpsertSite(site map[string]any) (string, error) {
 		toInt(site["cache_max_object_kb"], 2048),
 		bcookies,
 		boolInt(toBool(site["recaptcha_enabled"], false)),
+		boolInt(toBool(site["auth_challenge_enabled"], false)),
+		toString(site["auth_challenge_hash"], ""),
+		boolInt(toBool(site["dynamic_protection"], false)),
 		toString(site["cf_zone_id"], ""),
 		jsonListText(site["blocked_countries"], "[]"),
 		float64(time.Now().UnixNano())/1e9,

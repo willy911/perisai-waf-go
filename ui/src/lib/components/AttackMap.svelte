@@ -61,8 +61,8 @@
 		try {
 			const topo = (await (await fetch("map-land.json")).json()) as Parameters<typeof topoToLand>[0];
 			const polys = topoToLand(topo);
-			ctx.fillStyle = "#16233a";
-			ctx.strokeStyle = "#334155";
+			ctx.fillStyle = "#d9ebe8";
+			ctx.strokeStyle = "#bcd9d4";
 			ctx.lineWidth = 0.7;
 			ctx.beginPath();
 			for (const poly of polys) {
@@ -78,7 +78,7 @@
 			ctx.fill();
 			ctx.stroke();
 		} catch {
-			ctx.strokeStyle = "#1e293b";
+			ctx.strokeStyle = "#e3efec";
 			for (let i = 1; i < 12; i++) {
 				ctx.beginPath();
 				ctx.moveTo((W * i) / 12, 0);
@@ -108,7 +108,7 @@
 			ctx.beginPath();
 			ctx.arc(x, y, r * 2, 0, 7);
 			ctx.fill();
-			ctx.fillStyle = "#e2e8f0";
+			ctx.fillStyle = "#33544f";
 			ctx.font = "11px sans-serif";
 			ctx.fillText(`${p.city ? p.city + ", " : ""}${p.country} (${p.count}x)`, x + 8, y - 8);
 		}
@@ -134,7 +134,7 @@
 		</Button>
 	</CardHeader>
 	<CardContent>
-		<canvas bind:this={canvas} width="1100" height="480" class="w-full rounded-xl border border-border bg-[#0b1220]"></canvas>
+		<canvas bind:this={canvas} width="1100" height="480" class="w-full rounded-xl border border-border bg-[#eef6f5]"></canvas>
 		<p class="mt-2 text-xs text-muted-foreground">
 			GeoIP: file GeoLite2-City.mmdb di data_dir bila ada, else API ip-api.com (di-cache). IP privat tidak dipetakan.
 		</p>

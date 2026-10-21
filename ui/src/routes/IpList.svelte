@@ -82,7 +82,7 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-2xl font-bold">Black/whitelist IP</h1>
+		<h1 class="text-2xl font-extrabold tracking-tight">Black/whitelist IP</h1>
 		<p class="text-sm text-muted-foreground">Daftar IP/CIDR manual — whitelist menang atas blacklist & melewati semua pemeriksaan</p>
 	</div>
 
@@ -114,7 +114,7 @@
 					<Label for="g-note">Catatan</Label>
 					<Input id="g-note" bind:value={gNote} placeholder="catatan" />
 				</div>
-				<Button onclick={addIp} disabled={adding}>{adding ? "Menambah…" : "Tambah"}</Button>
+				<Button class="uppercase tracking-wide" onclick={addIp} disabled={adding}>{adding ? "Menambah…" : "Tambah"}</Button>
 			</div>
 		</CardContent>
 	</Card>
@@ -145,7 +145,7 @@
 							<TableCell class="text-muted-foreground">{e.scope}</TableCell>
 							<TableCell class="text-muted-foreground">{e.note || "-"}</TableCell>
 							<TableCell class="text-muted-foreground">
-								{#if dead}<span class="text-amber-400">⚠️ kedaluwarsa</span>
+								{#if dead}<span class="text-amber-600">⚠️ kedaluwarsa</span>
 								{:else}{e.expires_at ? fmtDateTime(e.expires_at) : "permanen"}{/if}
 							</TableCell>
 							<TableCell>

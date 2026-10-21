@@ -155,12 +155,12 @@
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold">IP Group</h1>
+			<h1 class="text-2xl font-extrabold tracking-tight">IP Group</h1>
 			<p class="text-sm text-muted-foreground">
 				Kelompok IP/CIDR bernama — anggota grup whitelist/blacklist diperlakukan sama seperti entri IP List
 			</p>
 		</div>
-		<Button onclick={openNew}><Plus class="size-4" /> Grup baru</Button>
+		<Button class="uppercase tracking-wide" onclick={openNew}><Plus class="size-4" /> Grup baru</Button>
 	</div>
 
 	<Card>

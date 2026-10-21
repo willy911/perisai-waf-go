@@ -119,7 +119,7 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-2xl font-bold">Cache</h1>
+		<h1 class="text-2xl font-extrabold tracking-tight">Cache</h1>
 		<p class="text-sm text-muted-foreground">
 			Cache respons di sisi WAF — hanya GET, status 200/301/302, tanpa cookie sesi.
 			Respons cache ditandai header <code class="rounded bg-input px-1">X-Perisai-Cache: HIT</code>.
@@ -186,7 +186,7 @@
 				<CardContent class="space-y-4">
 					{#if stats}
 						<div class="grid grid-cols-2 gap-4">
-							<div><div class="text-3xl font-bold text-green-400">{hitPct}%</div><div class="text-xs text-muted-foreground">Hit ratio</div></div>
+							<div><div class="text-3xl font-bold text-emerald-600">{hitPct}%</div><div class="text-xs text-muted-foreground">Hit ratio</div></div>
 							<div><div class="text-3xl font-bold">{stats.entries}</div><div class="text-xs text-muted-foreground">Entri</div></div>
 							<div><div class="text-2xl font-bold">{stats.hits.toLocaleString("id-ID")}</div><div class="text-xs text-muted-foreground">Hits</div></div>
 							<div><div class="text-2xl font-bold">{stats.misses.toLocaleString("id-ID")}</div><div class="text-xs text-muted-foreground">Misses</div></div>
