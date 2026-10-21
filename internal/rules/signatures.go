@@ -10,6 +10,7 @@ package rules
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Rule adalah satu signature deteksi. Pola dikompilasi dengan flag
@@ -73,7 +74,14 @@ func mustRule(id, name, category, severity string, patterns ...string) Rule {
 	return r
 }
 
-// builtinRules adalah seluruh 33 signature bawaan, port PERSIS dari Python
+// polaBanjirFileKosong: >=10 file control kosong (filename="") dalam satu
+// body (pola CVE-011). Ditulis terurai — bukan grup (...){10,} — karena
+// parser RE2 menolak repetisi grup yang total ekspansinya besar
+// (inner {0,400} x outer {10,} -> "invalid repeat count").
+var polaBanjirFileKosong = `filename\s*=\s*""` +
+	strings.Repeat(`(.{0,400}?filename\s*=\s*"")`, 9)
+
+// builtinRules adalah seluruh 37 signature bawaan
 // (ID, nama, kategori, severity, dan pola regex sama).
 //
 // SATU PENYIMPANGAN: pola pertama SQLI-002 memakai backreference (\2) yang
@@ -173,8 +181,41 @@ var builtinRules = []Rule{
 	mustRule("CVE-008", "Atlassian :: traversal (CVE-2026-21589)", "cve", "high",
 		`\.\.(::|%3a%3a)`, `(::|%3a%3a)\.\.`,
 		`/(WEB-INF|META-INF)(::|%3a%3a)`),
+	// CVE-010: PHP2Shell — CVE-2026-109619 (GHSA-6wmf-4rv5-p3rp, stale
+	// global state / use-after-free antar-request, RCE CVSS 9.2).
+	// Jalur consumer yang DIKONFIRMASI advisory PHP: session upload
+	// progress — mencapai session handling SEBELUM inisialisasi request
+	// normal, tanpa perlu session_start() di aplikasi. Field-nya bernama
+	// persis seperti session.upload_progress.name (default
+	// "PHP_SESSION_UPLOAD_PROGRESS") dan hanya muncul di body multipart.
+	// Advisory PHP menyebut fitur ini "hardly-used" → kemunculannya sinyal
+	// kuat; severity high (25 → agent) bukan block langsung, agar aplikasi
+	// langka yang sah memakai progress bar tidak langsung mati.
+	mustRule("CVE-010", "PHP2Shell upload progress (CVE-2026-109619)", "cve", "high",
+		`PHP_SESSION_UPLOAD_PROGRESS`),
+	// CVE-011: PHP2Shell — CVE-2026-109618 (GHSA-w8hw-w9fx-j79w, korupsi
+	// OOM saat parsing request, RCE CVSS 9.2). Strategi OOM yang
+	// dikonfirmasi advisory: (1) nama field bersarang ekstrem —
+	// "nested field names multiply the generated array work" (form sah
+	// jarang >5 tingkat; advisory menyarankan max_input_nesting_level
+	// diturunkan), (2) banjir file control kosong (filename="") yang
+	// TIDAK dihitung max_file_uploads tapi tetap membuat metadata array.
+	// Ini heuristik jalur-terkonfirmasi, bukan deteksi eksploitasi utuh —
+	// patch PHP (8.2.35/8.3.36/8.4.27/8.5.12) satu-satunya perbaikan penuh.
+	mustRule("CVE-011", "PHP2Shell multipart OOM probe (CVE-2026-109618)", "cve", "high",
+		`(\[[^\]\[]{0,64}\]){10,}`,
+		polaBanjirFileKosong),
 
 	// ---------------- Scanner / bot jahat ----------------
 	mustRule("SCAN-001", "Known scanner UA", "scanner", "high",
 		`sqlmap|nikto|nmap|masscan|dirbuster|gobuster|ffuf|nuclei|hydra|metasploit|acunetix|nessus|openvas|wpscan|zgrab|shodan`),
+	// SCAN-002: webshell hunt — sapuan nama file webshell khas + dotfile
+	// sensitif (kampanye nyata 2026-10-08: ~40 probe seperti /MacKenzie.php?p=,
+	// /3PJcpMFsD8B.php, /.zsh_history dalam 20 detik dari satu IP).
+	// Hanya nama DISTINGTIF yang diblok; nama generik (media.php, post.php,
+	// sitemap.php, readme.php, lock.php, ...) TIDAK masuk agar tanpa FP.
+	mustRule("SCAN-002", "Webshell hunt", "scanner", "high",
+		`\b(hellopress|wp_filemanager|this_is_a_new_hello_world|mackenzie|samll|zwso|ioxi-o|txets|adminner|thoms|pudym|myglu|sallu|gelay|xwpg|termps|gulu|amdin|jaw|3pjcpMFsD8B)\b`,
+		`/(ccc|aaa)\.php\b`,
+		`\.(zsh_history|bash_history|sh_history|mysql_history)\b`),
 }
