@@ -10,15 +10,15 @@ import (
 )
 
 type ServerConfig struct {
-	Host             string   `yaml:"host"`
-	Port             int      `yaml:"port"`
-	UpstreamHost     string   `yaml:"upstream_host"`
-	UpstreamPort     int      `yaml:"upstream_port"`
-	UpstreamTLS      bool     `yaml:"upstream_tls"`
-	MaxBodyMB        int      `yaml:"max_body_mb"`
-	RequestTimeout   int      `yaml:"request_timeout"`
-	UpstreamTLSVerify bool    `yaml:"upstream_tls_verify"`
-	TrustedProxies   []string `yaml:"trusted_proxies"`
+	Host              string   `yaml:"host"`
+	Port              int      `yaml:"port"`
+	UpstreamHost      string   `yaml:"upstream_host"`
+	UpstreamPort      int      `yaml:"upstream_port"`
+	UpstreamTLS       bool     `yaml:"upstream_tls"`
+	MaxBodyMB         int      `yaml:"max_body_mb"`
+	RequestTimeout    int      `yaml:"request_timeout"`
+	UpstreamTLSVerify bool     `yaml:"upstream_tls_verify"`
+	TrustedProxies    []string `yaml:"trusted_proxies"`
 }
 
 type TLSConfig struct {
@@ -48,9 +48,9 @@ type SystemOneConfig struct {
 }
 
 type AgentConfig struct {
-	Backend       string         `yaml:"backend"` // auto | heuristic | llm | systemone
-	MinConfidence float64        `yaml:"min_confidence"`
-	LLM           LLMConfig      `yaml:"llm"`
+	Backend       string          `yaml:"backend"` // auto | heuristic | llm | systemone
+	MinConfidence float64         `yaml:"min_confidence"`
+	LLM           LLMConfig       `yaml:"llm"`
 	SystemOne     SystemOneConfig `yaml:"systemone"`
 }
 
@@ -148,8 +148,16 @@ type Site struct {
 	CacheMaxObjectKB   int      `yaml:"cache_max_object_kb"`
 	CacheBypassCookies []string `yaml:"cache_bypass_cookies"`
 	RecaptchaEnabled   bool     `yaml:"recaptcha_enabled"`
-	CFZoneID           string   `yaml:"cf_zone_id"`
-	BotProtection      bool     `yaml:"bot_protection"`
+	// AuthChallengeEnabled/AuthChallengeHash: gerbang password per-site
+	// (fitur SafeLine "Authentication Challenge"). Hash berupa hash PBKDF2
+	// (package auth) dan TIDAK pernah dikirim ke UI.
+	AuthChallengeEnabled bool   `yaml:"auth_challenge_enabled"`
+	AuthChallengeHash    string `yaml:"auth_challenge_hash"`
+	// DynamicProtection: enkripsi dinamis HTML (fitur SafeLine) — body
+	// HTML dibungkus loader JS terenkripsi XOR+base64 per respons.
+	DynamicProtection bool   `yaml:"dynamic_protection"`
+	CFZoneID          string `yaml:"cf_zone_id"`
+	BotProtection     bool   `yaml:"bot_protection"`
 	// BlockedCountries: kode negara ISO yang diblokir untuk site ini;
 	// kosong/nil -> pakai daftar global geo.blocked_countries.
 	BlockedCountries []string `yaml:"blocked_countries"`

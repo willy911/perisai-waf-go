@@ -148,6 +148,41 @@ kerja proses saat start (di Docker: `/app`, yaitu folder perisai-waf).
   ```
 - Image Docker menyertakan `bash` agar terminal penuh di dalam container.
 
+## MCP Server
+
+Server MCP (Model Context Protocol) di endpoint `POST /mcp` pada port
+dashboard yang sama — padanan fitur `mcp_server` SafeLine. Transport
+JSON-RPC 2.0 (`initialize`, `ping`, `tools/list`, `tools/call`),
+protokol versi `2024-11-05`.
+
+- Auth: token dashboard yang sama seperti API — kirim header
+  `Authorization: Bearer <token dashboard>` (atau `?token=`). Tanpa
+  token → 401.
+- Contoh konfigurasi klien (Claude Desktop / klien MCP HTTP lain):
+
+  ```json
+  {
+    "mcpServers": {
+      "perisai-waf": {
+        "url": "http://127.0.0.1:8899/mcp",
+        "headers": { "Authorization": "Bearer <token dashboard>" }
+      }
+    }
+  }
+  ```
+
+- Tool yang tersedia:
+
+  | Tool | Argumen | Fungsi |
+  | --- | --- | --- |
+  | `get_stats` | — | Statistik trafik & serangan 24 jam terakhir |
+  | `recent_requests` | `limit` | Log request terbaru |
+  | `list_rules` | — | Daftar signature + status aktif |
+  | `toggle_rule` | `id`, `enabled` | Nyalakan/matikan signature global |
+  | `list_sites` | — | Daftar website yang dilindungi |
+  | `list_ip_entries` | — | Daftar entri whitelist/blacklist IP |
+  | `add_ip_entry` | `ip`, `list`, `note` | Tambah IP/CIDR ke daftar white/black |
+
 ## Catatan port
 
 - Bentuk JSON API dashboard PERSIS seperti versi Python agar SPA lama jalan
