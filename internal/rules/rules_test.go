@@ -60,8 +60,8 @@ func mustRuleT(t *testing.T, id, name, category, severity string, patterns ...st
 
 func TestJumlahRuleBawaan(t *testing.T) {
 	e := testEngine()
-	if len(e.Rules()) != 34 {
-		t.Fatalf("rule bawaan = %d, mau 34", len(e.Rules()))
+	if len(e.Rules()) != 37 {
+		t.Fatalf("rule bawaan = %d, mau 37", len(e.Rules()))
 	}
 	ids := map[string]bool{}
 	for _, r := range e.Rules() {
@@ -348,6 +348,84 @@ func TestCVE008DoubleColonTraversal(t *testing.T) {
 	}
 }
 
+func TestCVE010PHP2ShellUploadProgress(t *testing.T) {
+	// CVE-2026-109619: consumer terkonfirmasi = session upload progress.
+	// Body multipart yang memuat field PHP_SESSION_UPLOAD_PROGRESS harus
+	// kena CVE-010 -> agent (skor 25), bukan allow.
+	e := testEngine()
+	ct := map[string]string{
+		"user-agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+		"content-type": "multipart/form-data; boundary=----x",
+	}
+	body := []byte("------x\r\n" +
+		"Content-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\n" +
+		"upload_progress_abc123\r\n" +
+		"------x\r\n" +
+		"Content-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\n" +
+		"Content-Type: text/plain\r\n\r\nhalo\r\n------x--\r\n")
+	r := e.Triage(req("/upload", "", ct, body, "POST"))
+	if !hitSet(r.Hits)["CVE-010"] {
+		t.Fatal("CVE-010 tidak kena field upload progress")
+	}
+	if r.Action != "agent" {
+		t.Fatalf("action=%s, mau agent", r.Action)
+	}
+	// negatif: upload multipart normal tanpa field itu tidak boleh kena
+	bodyOK := []byte("------x\r\n" +
+		"Content-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\n" +
+		"Content-Type: text/plain\r\n\r\nhalo dunia\r\n------x--\r\n")
+	r = e.Triage(req("/upload", "", ct, bodyOK, "POST"))
+	if hitSet(r.Hits)["CVE-010"] || hitSet(r.Hits)["CVE-011"] {
+		t.Fatal("upload normal false positive CVE-010/011")
+	}
+	if r.Action != "allow" {
+		t.Fatalf("upload normal: action=%s, mau allow", r.Action)
+	}
+}
+
+func TestCVE011PHP2ShellMultipartOOM(t *testing.T) {
+	// CVE-2026-109618: strategi OOM terkonfirmasi — nama field bersarang
+	// ekstrem & banjir file control kosong.
+	e := testEngine()
+	// (1) nesting 11 tingkat
+	body := []byte("x[a][b][c][d][e][f][g][h][i][j][k]=1")
+	r := e.Triage(req("/submit", "", nil, body, "POST"))
+	if !hitSet(r.Hits)["CVE-011"] {
+		t.Fatal("CVE-011 tidak kena nesting ekstrem")
+	}
+	// (2) 12 file control kosong dalam satu body multipart
+	var sb strings.Builder
+	for i := 0; i < 12; i++ {
+		sb.WriteString("------x\r\nContent-Disposition: form-data; name=\"f[]\"; filename=\"\"\r\nContent-Type: application/octet-stream\r\n\r\n\r\n")
+	}
+	sb.WriteString("------x--\r\n")
+	r = e.Triage(req("/upload", "", nil, []byte(sb.String()), "POST"))
+	if !hitSet(r.Hits)["CVE-011"] {
+		t.Fatal("CVE-011 tidak kena banjir filename kosong")
+	}
+	// negatif: form bersarang wajar (3 tingkat, ala framework) tidak kena
+	r = e.Triage(req("/checkout", "", nil,
+		[]byte("order[items][0][qty]=2&order[items][1][qty]=1"), "POST"))
+	if hitSet(r.Hits)["CVE-011"] {
+		t.Fatal("CVE-011 false positive pada form wajar")
+	}
+	// negatif: JSON array bersarang tidak kena pola nesting
+	r = e.Triage(req("/api", "", nil,
+		[]byte(`{"a":[[1],[2],[3]],"b":{"c":[4,5]}}`), "POST"))
+	if hitSet(r.Hits)["CVE-011"] {
+		t.Fatal("CVE-011 false positive pada JSON")
+	}
+	// negatif: 2 file kosong (form upload ganda yang sah) tidak kena
+	var sb2 strings.Builder
+	for i := 0; i < 2; i++ {
+		sb2.WriteString("------x\r\nContent-Disposition: form-data; name=\"f[]\"; filename=\"\"\r\n\r\n\r\n")
+	}
+	r = e.Triage(req("/upload", "", nil, []byte(sb2.String()), "POST"))
+	if hitSet(r.Hits)["CVE-011"] {
+		t.Fatal("CVE-011 false positive pada 2 file kosong")
+	}
+}
+
 func TestSSRFMetadata(t *testing.T) {
 	e := testEngine()
 	r := e.Triage(req("/fetch", "url=http://169.254.169.254/latest/meta-data", nil, nil, ""))
@@ -520,8 +598,8 @@ func TestCustomRuleMasukKeEngine(t *testing.T) {
 	// Custom rule dari learner ikut dipindai setelah rule bawaan.
 	custom := mustRuleT(t, "C1", "custom probe", "anomaly", "medium", `kue-lapis-legit`)
 	e := testEngineCustom(custom)
-	if len(e.Rules()) != 35 {
-		t.Fatalf("jumlah rule = %d, mau 35 (34 bawaan + 1 custom)", len(e.Rules()))
+	if len(e.Rules()) != 38 {
+		t.Fatalf("jumlah rule = %d, mau 38 (37 bawaan + 1 custom)", len(e.Rules()))
 	}
 	r := e.Triage(req("/toko", "menu=kue-lapis-legit", nil, nil, ""))
 	if !hitSet(r.Hits)["C1"] {
@@ -529,5 +607,54 @@ func TestCustomRuleMasukKeEngine(t *testing.T) {
 	}
 	if r.Score != 15 || r.Action != "allow" {
 		t.Fatalf("custom medium: score=%v action=%s, mau 15/allow", r.Score, r.Action)
+	}
+}
+
+func TestWebshellHunt(t *testing.T) {
+	e := testEngine()
+	// Probe dari kampanye webshell hunt nyata (2026-10-08) — harus kena.
+	for _, p := range []string{
+		"/MacKenzie.php?p=",
+		"/wp-content/plugins/hellopress/wp_filemanager.php",
+		"/this_is_a_new_hello_world.php",
+		"/3PJcpMFsD8B.php",
+		"/samll.php",
+		"/zwso.php",
+		"/ccc.php?p=",
+		"/aaa.php",
+		"/.zsh_history",
+		"/.bash_history",
+	} {
+		path, query := p, ""
+		if i := strings.Index(p, "?"); i >= 0 {
+			path, query = p[:i], p[i+1:]
+		}
+		r := e.Triage(req(path, query, map[string]string{"user-agent": "t"}, nil, ""))
+		if !hitSet(r.Hits)["SCAN-002"] {
+			t.Fatalf("%s: SCAN-002 tidak kena", p)
+		}
+		if r.Action != "agent" && r.Action != "block" {
+			t.Fatalf("%s: action=%s, mau agent/block", p, r.Action)
+		}
+	}
+	// Varian ter-encode tetap kena via multi-decode.
+	r := e.Triage(req("/%2Ezsh_history", "", map[string]string{"user-agent": "t"}, nil, ""))
+	if !hitSet(r.Hits)["SCAN-002"] {
+		t.Fatal("varian encode /.zsh_history tidak kena")
+	}
+	// Nama file generik TIDAK boleh kena (hindari false positive).
+	for _, p := range []string{
+		"/media.php", "/post.php", "/sitemap.php", "/readme.php",
+		"/lock.php", "/class.php", "/wp-admin/user/", "/index.php",
+	} {
+		r := e.Triage(req(p, "", map[string]string{"user-agent": "t"}, nil, ""))
+		if hitSet(r.Hits)["SCAN-002"] {
+			t.Fatalf("%s: SCAN-002 false positive", p)
+		}
+	}
+	// ?p= WordPress yang wajar (ID post) tidak boleh kena.
+	r = e.Triage(req("/", "p=123", map[string]string{"user-agent": "t"}, nil, ""))
+	if hitSet(r.Hits)["SCAN-002"] {
+		t.Fatal("?p=123 false positive")
 	}
 }
