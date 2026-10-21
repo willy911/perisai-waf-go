@@ -62,6 +62,14 @@ const (
 	// RecaptchaVerifyPath adalah endpoint internal verifikasi reCAPTCHA.
 	// Request ke path ini tidak diteruskan ke upstream (sama spt Python).
 	RecaptchaVerifyPath = "/__perisai__/recaptcha-verify"
+	// AuthPath adalah endpoint internal gerbang password per-site
+	// (Authentication Challenge ala SafeLine). Form login di-post ke sini;
+	// request ke path ini tidak diteruskan ke upstream.
+	AuthPath = "/__perisai__/auth"
+	// AuthCookieName adalah nama cookie bukti lolos gerbang password.
+	AuthCookieName = "perisai_auth"
+	// AuthTTL adalah masa berlaku cookie auth, dalam detik (24 jam).
+	AuthTTL = 86400
 )
 
 // hopByHop adalah header yang tidak diteruskan ke/diambil dari upstream.
@@ -246,6 +254,11 @@ type Server struct {
 	certMu      sync.Mutex
 	certCache   map[string]*tls.Certificate
 	defaultCert *tls.Certificate
+
+	// Cache setting halaman blokir kustom (TTL blockPageCacheTTL).
+	blockMu    sync.Mutex
+	blockCache string
+	blockAt    time.Time
 }
 
 // NewServer membuat Server. Parameter extra (variadic, opsional) boleh berisi
@@ -563,6 +576,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Endpoint internal: gerbang password per-site (Authentication
+	// Challenge). GET menampilkan form, POST memverifikasi password;
+	// tidak diteruskan ke upstream.
+	if path == AuthPath {
+		s.handleAuth(w, r, body)
+		return
+	}
+
 	host := hostOnly(r.Host)
 	site := s.route(host)
 	siteID := ""
@@ -601,7 +622,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "black":
 		logReq("block", "BLACKLIST", 100, 0)
-		s.writeDirect(w, 403, blockPage(reqID, "IP masuk daftar hitam manual."),
+		s.writeDirect(w, 403, s.blockPageFor(reqID, clientIP, "BLACKLIST", path,
+			"IP masuk daftar hitam manual."), "text/html; charset=utf-8", nil)
+		return
+	}
+
+	// -0a. Authentication Challenge per-site (fitur SafeLine): gerbang
+	// password sebelum pengunjung mencapai aplikasi — setelah cek daftar
+	// IP (whitelist sudah bypass, blacklist sudah diblokir di atas) dan
+	// sebelum triase/upstream. Path internal (__perisai__) dikecualikan.
+	if authAktif(site) && !strings.HasPrefix(path, "/__perisai__/") &&
+		!verifyAuthToken(s.secret, site.ID, authCookie(r)) {
+		logReq("challenge", "AUTH-CHALLENGE", 0, 0)
+		next := r.URL.RequestURI()
+		if next == "" {
+			next = "/"
+		}
+		s.writeDirect(w, http.StatusUnauthorized, authPage(next, ""),
 			"text/html; charset=utf-8", nil)
 		return
 	}
@@ -610,7 +647,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if cc := s.geoBlockedCountry(clientIP, site); cc != "" {
 		logReq("block", "GEO", 100, 0)
 		s.writeDirect(w, 403,
-			blockPage(reqID, "akses dari negara "+cc+" diblokir."),
+			s.blockPageFor(reqID, clientIP, "GEO", path,
+				"akses dari negara "+cc+" diblokir."),
 			"text/html; charset=utf-8", nil)
 		return
 	}
@@ -619,7 +657,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.rep.Check(clientIP) {
 		logReq("block", "REPUTATION", 100, 0)
 		s.writeDirect(w, 403,
-			blockPage(reqID, "IP diblokir sementara karena riwayat serangan."),
+			s.blockPageFor(reqID, clientIP, "REPUTATION", path,
+				"IP diblokir sementara karena riwayat serangan."),
 			"text/html; charset=utf-8", nil)
 		return
 	}
@@ -639,7 +678,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.rep.RecordBlock(clientIP)
 				logReq("block", "BOT", float64(bscore), 0)
 				s.writeDirect(w, 403,
-					blockPage(reqID, "terdeteksi bot otomatis ("+strings.Join(bsignals, ", ")+")."),
+					s.blockPageFor(reqID, clientIP, "BOT", path,
+						"terdeteksi bot otomatis ("+strings.Join(bsignals, ", ")+")."),
 					"text/html; charset=utf-8", nil)
 				return
 			}
@@ -680,7 +720,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if fname, reason, blocked := s.scanUploads(req); blocked {
 			s.rep.RecordBlock(clientIP)
 			logReq("block", "MALWARE-UPLOAD", 100, 0)
-			s.writeDirect(w, 403, blockPage(reqID,
+			s.writeDirect(w, 403, s.blockPageFor(reqID, clientIP,
+				"MALWARE-UPLOAD", path,
 				"upload berbahaya ditolak ("+fname+": "+reason+")"),
 				"text/html; charset=utf-8", nil)
 			return
@@ -703,7 +744,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.rep.RecordBlock(clientIP)
 		logReq("block", topRule, score, 0)
 		s.writeDirect(w, 403,
-			blockPage(reqID, "terdeteksi pola serangan ("+topRule+")"),
+			s.blockPageFor(reqID, clientIP, topRule, path,
+				"terdeteksi pola serangan ("+topRule+")"),
 			"text/html; charset=utf-8", nil)
 		return
 	}
@@ -733,7 +775,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.rep.RecordBlock(clientIP)
 				logReq("block", topRule, score, agentConf)
 				s.writeDirect(w, 403,
-					blockPage(reqID, "AI agent mengkonfirmasi serangan"),
+					s.blockPageFor(reqID, clientIP, topRule, path,
+						"AI agent mengkonfirmasi serangan"),
 					"text/html; charset=utf-8", nil)
 				return
 			case "challenge":
@@ -1120,6 +1163,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request,
 				out.Header.Set("X-Forwarded-Proto", "http")
 			}
 			out.Header.Set("X-Perisai", "1")
+			// Proteksi dinamis: paksa upstream membalas identity (tanpa
+			// gzip) agar body HTML bisa dibungkus loader terenkripsi.
+			if site != nil && site.DynamicProtection {
+				out.Header.Del("Accept-Encoding")
+			}
 		},
 		Transport: &http.Transport{
 			DialContext: (&net.Dialer{
@@ -1136,13 +1184,27 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request,
 				return err
 			}
 			resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(data))
-			resp.ContentLength = int64(len(data))
 			for _, h := range hopByHop {
 				resp.Header.Del(h)
 			}
+			// Proteksi dinamis (fitur SafeLine): bungkus HTML ke loader
+			// terenkripsi. Hasil transformasi tidak disimpan ke cache
+			// site dan ditandai no-store.
+			transformed := false
+			if site != nil && site.DynamicProtection &&
+				dynamicShouldWrap(resp, data) {
+				data = dynamicWrap(data)
+				resp.Header.Set("Cache-Control", "no-store")
+				transformed = true
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(data))
+			resp.ContentLength = int64(len(data))
+			// Header Content-Length upstream bisa basi (terutama setelah
+			// transformasi dinamis mengubah ukuran body) — framing
+			// mengikuti field ContentLength.
+			resp.Header.Del("Content-Length")
 			// Simpan ke cache WAF-side bila memenuhi syarat.
-			if site != nil && site.CacheEnabled {
+			if !transformed && site != nil && site.CacheEnabled {
 				if s.cacheStore(site, req, origHost, resp.StatusCode,
 					resp.Header, data) {
 					resp.Header.Set("X-Perisai-Cache", "MISS")
@@ -1454,29 +1516,32 @@ func orInt(d map[string]any, k string, def int) int {
 // siteFromMap membangun config.Site dari baris DB — port Site.from_dict.
 func siteFromMap(d map[string]any) *config.Site {
 	return &config.Site{
-		ID:                 mapStr(d, "id", ""),
-		Domain:             strings.ToLower(mapStr(d, "domain", "")),
-		UpstreamHost:       mapStr(d, "upstream_host", "127.0.0.1"),
-		UpstreamPort:       mapInt(d, "upstream_port", 8000),
-		UpstreamTLS:        mapBool(d, "upstream_tls", false),
-		UpstreamTLSVerify:  mapBool(d, "upstream_tls_verify", true),
-		PreserveHost:       mapBool(d, "preserve_host", true),
-		Enabled:            mapBool(d, "enabled", true),
-		AgentEnabled:       mapBool(d, "agent_enabled", true),
-		DisabledRules:      mapList(d, "disabled_rules"),
-		TLSCert:            mapStr(d, "tls_cert", ""),
-		TLSKey:             mapStr(d, "tls_key", ""),
-		TLSExpiresAt:       mapFloat(d, "tls_expires_at", 0),
-		DDoSMode:           mapBool(d, "ddos_mode", false),
-		DDoSRPS:            orFloat(d, "ddos_rps", 5),
-		CacheEnabled:       mapBool(d, "cache_enabled", false),
-		CacheTTL:           orInt(d, "cache_ttl", 60),
-		CacheMaxEntries:    orInt(d, "cache_max_entries", 1000),
-		CacheMaxObjectKB:   orInt(d, "cache_max_object_kb", 2048),
-		CacheBypassCookies: mapList(d, "cache_bypass_cookies"),
-		RecaptchaEnabled:   mapBool(d, "recaptcha_enabled", false),
-		CFZoneID:           mapStr(d, "cf_zone_id", ""),
-		BotProtection:      mapBool(d, "bot_protection", true),
-		BlockedCountries:   mapList(d, "blocked_countries"),
+		ID:                   mapStr(d, "id", ""),
+		Domain:               strings.ToLower(mapStr(d, "domain", "")),
+		UpstreamHost:         mapStr(d, "upstream_host", "127.0.0.1"),
+		UpstreamPort:         mapInt(d, "upstream_port", 8000),
+		UpstreamTLS:          mapBool(d, "upstream_tls", false),
+		UpstreamTLSVerify:    mapBool(d, "upstream_tls_verify", true),
+		PreserveHost:         mapBool(d, "preserve_host", true),
+		Enabled:              mapBool(d, "enabled", true),
+		AgentEnabled:         mapBool(d, "agent_enabled", true),
+		DisabledRules:        mapList(d, "disabled_rules"),
+		TLSCert:              mapStr(d, "tls_cert", ""),
+		TLSKey:               mapStr(d, "tls_key", ""),
+		TLSExpiresAt:         mapFloat(d, "tls_expires_at", 0),
+		DDoSMode:             mapBool(d, "ddos_mode", false),
+		DDoSRPS:              orFloat(d, "ddos_rps", 5),
+		CacheEnabled:         mapBool(d, "cache_enabled", false),
+		CacheTTL:             orInt(d, "cache_ttl", 60),
+		CacheMaxEntries:      orInt(d, "cache_max_entries", 1000),
+		CacheMaxObjectKB:     orInt(d, "cache_max_object_kb", 2048),
+		CacheBypassCookies:   mapList(d, "cache_bypass_cookies"),
+		RecaptchaEnabled:     mapBool(d, "recaptcha_enabled", false),
+		AuthChallengeEnabled: mapBool(d, "auth_challenge_enabled", false),
+		AuthChallengeHash:    mapStr(d, "auth_challenge_hash", ""),
+		DynamicProtection:    mapBool(d, "dynamic_protection", false),
+		CFZoneID:             mapStr(d, "cf_zone_id", ""),
+		BotProtection:        mapBool(d, "bot_protection", true),
+		BlockedCountries:     mapList(d, "blocked_countries"),
 	}
 }
