@@ -254,6 +254,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cf/config", g(d.handleCFConfigGet))
 	mux.HandleFunc("GET /api/cf/zones", g(d.handleCFZones))
 	mux.HandleFunc("GET /api/cf/stats", g(d.handleCFStats))
+	mux.HandleFunc("GET /api/block-page", g(d.handleBlockPageGet))
 	mux.HandleFunc("GET /api/terminal/config", g(d.handleTerminalConfig))
 	// Websocket terminal: auth dicek manual di dalam handler (sebelum upgrade).
 	mux.HandleFunc("GET /api/terminal/ws", d.handleTerminalWS)
@@ -266,6 +267,8 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sites/{id}/ddos", g(d.handleSiteDDoS))
 	mux.HandleFunc("POST /api/sites/{id}/cert", g(d.handleSiteCertUpload))
 	mux.HandleFunc("POST /api/sites/{id}/recaptcha", g(d.handleSiteRecaptcha))
+	mux.HandleFunc("POST /api/sites/{id}/auth-challenge", g(d.handleSiteAuthChallenge))
+	mux.HandleFunc("POST /api/sites/{id}/dynamic-protection", g(d.handleSiteDynamicProtection))
 	mux.HandleFunc("POST /api/sites/{id}/geoblock", g(d.handleSiteGeoBlock))
 	mux.HandleFunc("POST /api/rules/{id}/toggle", g(d.handleRuleToggle))
 	mux.HandleFunc("POST /api/ai-config", g(d.handleAIConfigPost))
@@ -279,6 +282,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("POST /api/recaptcha/config", g(d.handleRecaptchaPost))
 	mux.HandleFunc("POST /api/cf/config", g(d.handleCFConfigPost))
 	mux.HandleFunc("POST /api/cf/purge", g(d.handleCFPurge))
+	mux.HandleFunc("POST /api/block-page", g(d.handleBlockPagePost))
 
 	// PUT privat.
 	mux.HandleFunc("PUT /api/ip-groups/{id}", g(d.handleIPGroupUpdate))
@@ -289,6 +293,9 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/ip-groups/{id}/members", g(d.handleIPGroupDelMember))
 	mux.HandleFunc("DELETE /api/sites/{id}", g(d.handleSiteDelete))
 	mux.HandleFunc("DELETE /api/sites/{id}/cert", g(d.handleSiteCertDelete))
+
+	// MCP server (JSON-RPC 2.0) — auth sama seperti /api.
+	mux.HandleFunc("POST /mcp", g(d.handleMCP))
 
 	// Catch-all: /api/* tak dikenal -> 404 JSON; selain itu serve SPA.
 	mux.HandleFunc("/", d.handleSPA)
@@ -971,6 +978,18 @@ func (d *Dashboard) handleIPGroupGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSites: GET /api/sites — daftar site + requests_24h.
+// siteView menyiapkan baris site untuk dikirim ke UI: hash gerbang
+// password (auth_challenge_hash) TIDAK pernah keluar — diganti flag
+// auth_challenge_set. Field boolean baru dinormalisasi ke bool.
+func siteView(s map[string]any) map[string]any {
+	set := pyStr(s["auth_challenge_hash"]) != ""
+	delete(s, "auth_challenge_hash")
+	s["auth_challenge_set"] = set
+	s["auth_challenge_enabled"] = pyBool(s["auth_challenge_enabled"])
+	s["dynamic_protection"] = pyBool(s["dynamic_protection"])
+	return s
+}
+
 func (d *Dashboard) handleSites(w http.ResponseWriter, r *http.Request) {
 	sites, err := d.store.ListSites()
 	if err != nil {
@@ -987,6 +1006,7 @@ func (d *Dashboard) handleSites(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, s := range sites {
 		s["requests_24h"] = counts[pyStr(s["id"])]
+		siteView(s)
 	}
 	writeJSON(w, http.StatusOK, sites)
 }
@@ -1008,7 +1028,7 @@ func (d *Dashboard) handleSiteGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	site["requests_24h"] = counts[pyStr(site["id"])]
-	writeJSON(w, http.StatusOK, site)
+	writeJSON(w, http.StatusOK, siteView(site))
 }
 
 // handleRules: GET /api/rules — daftar signature + flag disabled.
@@ -1796,6 +1816,128 @@ func (d *Dashboard) handleSiteRecaptcha(w http.ResponseWriter, r *http.Request) 
 	writeOK(w, map[string]any{
 		"recaptcha_enabled": pyBool(site["recaptcha_enabled"]),
 	})
+}
+
+// handleSiteAuthChallenge: POST /api/sites/{id}/auth-challenge — atur
+// gerbang password per site (Authentication Challenge ala SafeLine).
+// Body: {enabled, password?}. Password yang diberikan di-hash (PBKDF2)
+// lalu disimpan; mengaktifkan tanpa hash tersimpan & tanpa password ->
+// 400. Hash tidak pernah dikembalikan (hanya flag auth_challenge_set).
+func (d *Dashboard) handleSiteAuthChallenge(w http.ResponseWriter, r *http.Request) {
+	site, err := d.store.GetSite(r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "site tidak ditemukan")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body, err := readJSON(r)
+	if err != nil {
+		body = map[string]any{}
+	}
+	if v, ok := body["password"]; ok {
+		if pw := pyStr(v); pw != "" {
+			hash, herr := auth.HashPassword(pw)
+			if herr != nil {
+				writeErr(w, http.StatusInternalServerError, herr.Error())
+				return
+			}
+			site["auth_challenge_hash"] = hash
+		}
+	}
+	enabled := pyBool(site["auth_challenge_enabled"])
+	if v, ok := body["enabled"]; ok {
+		enabled = pyBool(v)
+	} else {
+		enabled = !enabled
+	}
+	if enabled && pyStr(site["auth_challenge_hash"]) == "" {
+		writeErr(w, http.StatusBadRequest,
+			"password belum diatur — isi password untuk mengaktifkan")
+		return
+	}
+	if enabled {
+		site["auth_challenge_enabled"] = 1
+	} else {
+		site["auth_challenge_enabled"] = 0
+	}
+	if _, err := d.store.UpsertSite(site); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.reloadSites()
+	writeOK(w, map[string]any{
+		"auth_challenge_enabled": enabled,
+		"auth_challenge_set":     pyStr(site["auth_challenge_hash"]) != "",
+	})
+}
+
+// handleSiteDynamicProtection: POST /api/sites/{id}/dynamic-protection —
+// toggle proteksi dinamis (enkripsi HTML ala SafeLine) per site.
+func (d *Dashboard) handleSiteDynamicProtection(w http.ResponseWriter, r *http.Request) {
+	site, err := d.store.GetSite(r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "site tidak ditemukan")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body, err := readJSON(r)
+	if err != nil {
+		body = map[string]any{}
+	}
+	if v, ok := body["enabled"]; ok {
+		if pyBool(v) {
+			site["dynamic_protection"] = 1
+		} else {
+			site["dynamic_protection"] = 0
+		}
+	} else {
+		site["dynamic_protection"] = flipInt(site["dynamic_protection"])
+	}
+	if _, err := d.store.UpsertSite(site); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.reloadSites()
+	writeOK(w, map[string]any{
+		"dynamic_protection": pyBool(site["dynamic_protection"]),
+	})
+}
+
+// handleBlockPageGet: GET /api/block-page — template halaman blokir
+// kustom saat ini (string kosong = halaman bawaan).
+func (d *Dashboard) handleBlockPageGet(w http.ResponseWriter, r *http.Request) {
+	tpl, err := d.store.GetSetting("block_page_html", "")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"html": tpl, "is_custom": tpl != "",
+	})
+}
+
+// handleBlockPagePost: POST /api/block-page {html} — simpan template
+// halaman blokir kustom (fitur SafeLine); string kosong = reset ke
+// bawaan. Placeholder yang diganti per request: {{IP}}, {{RULE}},
+// {{REQUEST_ID}}, {{PATH}}.
+func (d *Dashboard) handleBlockPagePost(w http.ResponseWriter, r *http.Request) {
+	body, err := readJSON(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	tpl := pyStr(body["html"])
+	if err := d.store.SetSetting("block_page_html", tpl); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"is_custom": tpl != ""})
 }
 
 // handleRuleToggle: POST /api/rules/{id}/toggle — nyalakan/matikan signature
