@@ -62,12 +62,12 @@
 </script>
 
 <div class="flex min-h-screen items-center justify-center bg-background p-4">
-	<Card class="w-full max-w-sm">
+	<Card class="w-full max-w-sm rounded-2xl shadow-xl shadow-slate-900/5">
 		<CardHeader class="text-center">
-			<div class="mx-auto mb-2 flex size-12 items-center justify-center rounded-xl bg-primary/15">
-				<Shield class="size-6 text-primary" />
+			<div class="mx-auto mb-2 flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/30">
+				<Shield class="size-6" />
 			</div>
-			<CardTitle class="text-xl">Perisai WAF</CardTitle>
+			<CardTitle class="text-xl font-extrabold">Perisai <span class="text-primary">WAF</span></CardTitle>
 			<CardDescription>Masuk ke dashboard admin</CardDescription>
 		</CardHeader>
 		<CardContent class="space-y-4">

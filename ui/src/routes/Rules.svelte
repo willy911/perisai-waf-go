@@ -74,7 +74,7 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-2xl font-bold">Custom rule</h1>
+		<h1 class="text-2xl font-extrabold tracking-tight">Custom rule</h1>
 		<p class="text-sm text-muted-foreground">Usulan aturan dari auto-learning & daftar signature</p>
 	</div>
 

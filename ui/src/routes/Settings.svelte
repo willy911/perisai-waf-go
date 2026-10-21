@@ -6,6 +6,7 @@
 	import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import { Input } from "$lib/components/ui/input/index.js";
+	import { Textarea } from "$lib/components/ui/textarea/index.js";
 	import { Label } from "$lib/components/ui/label/index.js";
 	import { Switch } from "$lib/components/ui/switch/index.js";
 	import {
@@ -44,6 +45,45 @@
 	let s1Status = $state("");
 	let s1Saving = $state(false);
 	let s1Testing = $state(false);
+
+	// ---- Halaman blokir kustom ----
+	let bpHtml = $state("");
+	let bpCustom = $state(false);
+	let bpStatus = $state("");
+	let bpSaving = $state(false);
+
+	async function loadBlockPage() {
+		try {
+			const c = await apiGet<{ html: string; is_custom: boolean }>("/api/block-page");
+			bpHtml = c.html || "";
+			bpCustom = c.is_custom;
+		} catch {
+			toast("Gagal memuat halaman blokir", { variant: "destructive" });
+		}
+	}
+
+	async function saveBlockPage() {
+		bpSaving = true;
+		bpStatus = "menyimpan…";
+		try {
+			const r = await apiPost<{ ok: boolean; is_custom: boolean }>("/api/block-page", { html: bpHtml });
+			bpCustom = r.is_custom;
+			bpStatus = r.is_custom ? "✅ Halaman kustom aktif (berlaku maks. 15 detik)." : "✅ Kembali ke halaman bawaan.";
+			toast("Halaman blokir tersimpan");
+		} catch (e) {
+			bpStatus = "❌ " + (e instanceof Error ? e.message : "gagal");
+		} finally {
+			bpSaving = false;
+		}
+	}
+
+	async function resetBlockPage() {
+		bpHtml = "";
+		await saveBlockPage();
+	}
+
+	// ---- MCP Server ----
+	let mcpUrl = $state("/mcp");
 
 	async function loadSystemOne() {
 		try {
@@ -195,14 +235,16 @@
 	}
 
 	onMount(() => {
+		mcpUrl = location.origin + "/mcp";
 		load();
 		loadSystemOne();
+		loadBlockPage();
 	});
 </script>
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-2xl font-bold">Setting</h1>
+		<h1 class="text-2xl font-extrabold tracking-tight">Setting</h1>
 		<p class="text-sm text-muted-foreground">Pengaturan AI agent & sesi</p>
 	</div>
 
@@ -340,6 +382,50 @@
 				<Button variant="outline" onclick={testSystemOne} disabled={s1Testing}>🔌 Test koneksi</Button>
 				{#if s1Status}<span class="text-sm text-muted-foreground">{s1Status}</span>{/if}
 			</div>
+		</CardContent>
+	</Card>
+
+	<Card class="max-w-3xl">
+		<CardHeader>
+			<CardTitle>🚫 Halaman Blokir Kustom</CardTitle>
+			<CardDescription>
+				Ganti halaman 403 bawaan dengan HTML sendiri (ala SafeLine). Placeholder yang diganti
+				per request: <code>{"{{IP}}"}</code>, <code>{"{{RULE}}"}</code>,
+				<code>{"{{REQUEST_ID}}"}</code>, <code>{"{{PATH}}"}</code> — nilainya di-escape otomatis.
+				Kosongkan lalu simpan untuk kembali ke halaman bawaan.
+			</CardDescription>
+		</CardHeader>
+		<CardContent class="space-y-4">
+			<div class="space-y-2">
+				<Label for="bp-html">HTML halaman blokir {bpCustom ? "(kustom aktif)" : "(bawaan)"}</Label>
+				<Textarea id="bp-html" rows={9} bind:value={bpHtml} placeholder="<html><body><h1>Diblokir</h1><p>IP: {"{{IP}}"}</p></body></html>" class="font-mono text-xs" />
+			</div>
+			<div class="flex items-center gap-2">
+				<Button onclick={saveBlockPage} disabled={bpSaving}>{bpSaving ? "Menyimpan…" : "💾 Simpan"}</Button>
+				<Button variant="outline" onclick={resetBlockPage} disabled={bpSaving}>↩️ Reset ke bawaan</Button>
+				{#if bpStatus}<span class="text-sm text-muted-foreground">{bpStatus}</span>{/if}
+			</div>
+		</CardContent>
+	</Card>
+
+	<Card class="max-w-3xl">
+		<CardHeader>
+			<CardTitle>🤖 MCP Server</CardTitle>
+			<CardDescription>
+				Endpoint Model Context Protocol (JSON-RPC 2.0) untuk klien AI — padanan fitur
+				mcp_server SafeLine. Autentikasi memakai token dashboard yang sama seperti API.
+			</CardDescription>
+		</CardHeader>
+		<CardContent class="space-y-3">
+			<div class="space-y-2">
+				<Label>Endpoint</Label>
+				<code class="block rounded bg-input px-2 py-1 font-mono text-xs">{mcpUrl}</code>
+			</div>
+			<p class="text-xs text-muted-foreground">
+				Header: <code>Authorization: Bearer &lt;token dashboard&gt;</code><br />
+				Tool tersedia: get_stats, recent_requests, list_rules, toggle_rule, list_sites,
+				list_ip_entries, add_ip_entry.
+			</p>
 		</CardContent>
 	</Card>
 

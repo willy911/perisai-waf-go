@@ -84,7 +84,7 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-2xl font-bold">ReCAPTCHA</h1>
+		<h1 class="text-2xl font-extrabold tracking-tight">ReCAPTCHA</h1>
 		<p class="text-sm text-muted-foreground">
 			Challenge Google reCAPTCHA sebagai alternatif JS challenge bawaan. Secret key tidak pernah ditampilkan kembali.
 		</p>

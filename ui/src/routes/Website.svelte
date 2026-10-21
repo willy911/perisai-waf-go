@@ -27,7 +27,7 @@
 		DialogDescription,
 		DialogFooter,
 	} from "$lib/components/ui/dialog/index.js";
-	import { Shield, Trash2, KeyRound, Cloud } from "lucide-svelte";
+	import { Shield, Trash2, KeyRound, Cloud, Lock } from "lucide-svelte";
 
 	let sites = $state<Site[]>([]);
 	let cfConfig = $state<CfConfig | null>(null);
@@ -62,6 +62,14 @@
 	let geoInput = $state("");
 	let geoSaving = $state(false);
 	let geoMsg = $state("");
+
+	// dialog authentication challenge
+	let authOpen = $state(false);
+	let authSite = $state<Site | null>(null);
+	let authEnabled = $state(false);
+	let authPassword = $state("");
+	let authSaving = $state(false);
+	let authMsg = $state("");
 
 	async function load() {
 		try {
@@ -130,6 +138,17 @@
 		try {
 			await apiPost(`/api/sites/${s.id}/recaptcha`, { enabled: !cur });
 			toast(!cur ? "reCAPTCHA diaktifkan" : "reCAPTCHA dinonaktifkan");
+			await load();
+		} catch (e) {
+			toast("Gagal", { description: e instanceof Error ? e.message : "", variant: "destructive" });
+		}
+	}
+
+	async function toggleDynamic(s: Site) {
+		const cur = !!s.dynamic_protection;
+		try {
+			await apiPost(`/api/sites/${s.id}/dynamic-protection`, { enabled: !cur });
+			toast(!cur ? "Proteksi dinamis (enkripsi HTML) diaktifkan" : "Proteksi dinamis dinonaktifkan");
 			await load();
 		} catch (e) {
 			toast("Gagal", { description: e instanceof Error ? e.message : "", variant: "destructive" });
@@ -249,6 +268,32 @@
 		}
 	}
 
+	function openAuth(s: Site) {
+		authSite = s;
+		authEnabled = !!s.auth_challenge_enabled;
+		authPassword = "";
+		authMsg = "";
+		authOpen = true;
+	}
+
+	async function saveAuth() {
+		if (!authSite) return;
+		authSaving = true;
+		authMsg = "Menyimpan…";
+		try {
+			const body: Record<string, unknown> = { enabled: authEnabled };
+			if (authPassword) body.password = authPassword;
+			await apiPost(`/api/sites/${authSite.id}/auth-challenge`, body);
+			toast("Authentication Challenge tersimpan — langsung berlaku");
+			authOpen = false;
+			await load();
+		} catch (e) {
+			authMsg = "❌ " + (e instanceof Error ? e.message : "gagal");
+		} finally {
+			authSaving = false;
+		}
+	}
+
 	function geoLabel(s: Site): string {
 		try {
 			const arr = JSON.parse(s.blocked_countries || "[]");
@@ -262,7 +307,7 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-2xl font-bold">Website</h1>
+		<h1 class="text-2xl font-extrabold tracking-tight">Website</h1>
 		<p class="text-sm text-muted-foreground">Domain yang dilindungi WAF</p>
 	</div>
 
@@ -297,7 +342,7 @@
 				<label class="flex items-center gap-2 text-sm" title="Teruskan Host header asli domain ke upstream">
 					<Switch bind:checked={fPreserve} /> Host asli
 				</label>
-				<Button onclick={addSite} disabled={adding}>{adding ? "Menambah…" : "Tambah"}</Button>
+				<Button class="uppercase tracking-wide" onclick={addSite} disabled={adding}>{adding ? "Menambah…" : "Tambah"}</Button>
 			</div>
 		</CardContent>
 	</Card>
@@ -314,6 +359,8 @@
 						<TableHead>AI Agent</TableHead>
 						<TableHead>DDoS</TableHead>
 						<TableHead>reCAPTCHA</TableHead>
+						<TableHead>Auth</TableHead>
+						<TableHead>Dinamis</TableHead>
 						<TableHead>CF Zone</TableHead>
 						<TableHead>Req/24j</TableHead>
 						<TableHead>Aksi</TableHead>
@@ -353,6 +400,19 @@
 								<Switch checked={!!s.recaptcha_enabled} onCheckedChange={() => toggleRecaptcha(s)} />
 							</TableCell>
 							<TableCell>
+								<Button
+									size="sm"
+									variant={s.auth_challenge_enabled ? "destructive" : "outline"}
+									onclick={() => openAuth(s)}
+									title="Authentication Challenge: gerbang password sebelum mencapai website"
+								>
+									<Lock class="size-4" /> {s.auth_challenge_enabled ? "ON" : "OFF"}
+								</Button>
+							</TableCell>
+							<TableCell>
+								<Switch checked={!!s.dynamic_protection} onCheckedChange={() => toggleDynamic(s)} />
+							</TableCell>
+							<TableCell>
 								{#if cfConfig}
 									<button class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground" onclick={() => openZone(s)} title="Atur mapping zone">
 										<Cloud class="size-3.5" /> {zoneFor(s.id)}
@@ -386,7 +446,7 @@
 						</TableRow>
 					{:else}
 						<TableRow>
-							<TableCell colspan={10} class="text-center text-muted-foreground">
+							<TableCell colspan={12} class="text-center text-muted-foreground">
 								Belum ada website. Tambahkan domain pertama di atas.
 							</TableCell>
 						</TableRow>
@@ -473,6 +533,34 @@
 		</div>
 		<DialogFooter>
 			<Button onclick={saveGeo} disabled={geoSaving}>{geoSaving ? "Menyimpan…" : "Simpan"}</Button>
+		</DialogFooter>
+	</DialogContent>
+</Dialog>
+
+<!-- dialog authentication challenge -->
+<Dialog bind:open={authOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>🔐 Authentication Challenge — {authSite?.domain}</DialogTitle>
+			<DialogDescription>
+				Gerbang password ala SafeLine: pengunjung wajib memasukkan password sebelum mencapai
+				website. Cookie bukti login berlaku 24 jam. Mengaktifkan pertama kali wajib mengisi password.
+			</DialogDescription>
+		</DialogHeader>
+		<div class="space-y-3">
+			<label class="flex items-center gap-2 text-sm">
+				<Switch bind:checked={authEnabled} /> aktifkan gerbang password
+			</label>
+			<div class="space-y-2">
+				<Label for="auth-pass">Password {authSite?.auth_challenge_set ? "(sudah diatur — kosongkan bila tidak diganti)" : ""}</Label>
+				<Input id="auth-pass" type="password" bind:value={authPassword} placeholder="password gerbang" autocomplete="new-password" />
+			</div>
+			{#if authMsg}
+				<p class="text-sm text-muted-foreground">{authMsg}</p>
+			{/if}
+		</div>
+		<DialogFooter>
+			<Button onclick={saveAuth} disabled={authSaving}>{authSaving ? "Menyimpan…" : "Simpan"}</Button>
 		</DialogFooter>
 	</DialogContent>
 </Dialog>

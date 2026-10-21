@@ -127,7 +127,7 @@
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold">Interceptions logs</h1>
+			<h1 class="text-2xl font-extrabold tracking-tight">Interceptions logs</h1>
 			<p class="text-sm text-muted-foreground">200 permintaan terakhir yang diproses WAF</p>
 		</div>
 		<Button variant="outline" size="sm" onclick={load} disabled={loading}>
@@ -243,9 +243,9 @@
 						<p class="text-sm text-destructive">❌ {analysisErr}</p>
 					{/if}
 					{#if ruleStatus && ruleStatus.status === "covered"}
-						<p class="text-sm text-green-700 dark:text-green-400">✓ Sudah tercakup aturan <code class="font-mono">{ruleStatus.by}</code> — tidak perlu rule baru.</p>
+						<p class="text-sm text-green-700">✓ Sudah tercakup aturan <code class="font-mono">{ruleStatus.by}</code> — tidak perlu rule baru.</p>
 					{:else if ruleStatus && ruleStatus.status === "proposed"}
-						<p class="text-sm text-amber-700 dark:text-amber-400">
+						<p class="text-sm text-amber-700">
 							＋ Aturan baru diusulkan: <code class="font-mono">{ruleStatus.id}</code>{ruleStatus.name ? ` (${ruleStatus.name})` : ""}
 							{#if ruleStatus.duplicate}
 								(sudah ada di antrean usulan)
