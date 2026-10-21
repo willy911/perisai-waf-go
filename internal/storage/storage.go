@@ -135,6 +135,8 @@ var extraColumns = [][3]string{
 	{"sites", "recaptcha_enabled", "INTEGER DEFAULT 0"},
 	{"sites", "cf_zone_id", "TEXT DEFAULT ''"},
 	{"sites", "blocked_countries", "TEXT DEFAULT '[]'"},
+	{"requests", "headers", "TEXT DEFAULT ''"},
+	{"requests", "body", "TEXT DEFAULT ''"},
 }
 
 var lateTables = []string{
@@ -344,17 +346,29 @@ func jsonListText(v any, def string) string {
 
 func (s *Storage) LogRequest(reqID string, ts float64, ip, method, path, query string,
 	score float64, decision string, agentConf float64, durationMs float64,
-	topRule, siteID string) error {
+	topRule, siteID, headersJSON, body string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.DB.Exec(
 		`INSERT INTO requests
 		 (id, ts, ip, method, path, query, score, decision,
-		  agent_conf, duration_ms, top_rule, site_id)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  agent_conf, duration_ms, top_rule, site_id, headers, body)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		reqID, ts, ip, method, truncate(path, 500), truncate(query, 500),
-		score, decision, agentConf, durationMs, topRule, siteID)
+		score, decision, agentConf, durationMs, topRule, siteID,
+		truncate(headersJSON, 2000), truncate(body, 2000))
 	return err
+}
+
+// GetRequest mengambil satu baris log request berdasarkan id.
+func (s *Storage) GetRequest(reqID string) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.DB.Query("SELECT * FROM requests WHERE id = ?", reqID)
+	if err != nil {
+		return nil, err
+	}
+	return scanOneRow(rows)
 }
 
 func (s *Storage) RecentRequests(limit int, siteID string) ([]map[string]any, error) {

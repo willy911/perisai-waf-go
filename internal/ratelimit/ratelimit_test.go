@@ -51,7 +51,10 @@ func TestRefill(t *testing.T) {
 
 // Refill tidak pernah melebihi burst.
 func TestRefillTidakMelebihiBurst(t *testing.T) {
-	l := New(100000, 3)
+	// rps 100 (1 token/10ms): refill 50ms sleep = 5 token tapi di-cap
+	// burst=3; jeda mikrodetik antar Allow() tak bisa me-refill token.
+	// (100000 rps = 1 token/10us, flaky di mesin sibuk.)
+	l := New(100, 3)
 	time.Sleep(50 * time.Millisecond)
 	for i := 0; i < 3; i++ {
 		if !l.Allow("k") {

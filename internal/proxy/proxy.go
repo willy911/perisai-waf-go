@@ -587,8 +587,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	decision, agentConf := "allow", 0.0
 	logReq := func(dec, topRule string, score, aconf float64) {
 		dur := math.Round(time.Since(t0).Seconds()*10000) / 10
+		hdrJSON, _ := json.Marshal(flatHeaders)
 		_ = s.store.LogRequest(req.ID, ts, req.ClientIP, req.Method, req.Path,
-			req.Query, score, dec, aconf, dur, topRule, siteID)
+			req.Query, score, dec, aconf, dur, topRule, siteID,
+			string(hdrJSON), string(body))
 	}
 
 	// -0. IP whitelist/blacklist manual (whitelist bypass semua)
