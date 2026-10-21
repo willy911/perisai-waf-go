@@ -121,9 +121,15 @@ func New(cfg *config.WAFConfig, store *storage.Storage, orch *agent.Orchestrator
 			d.geo = v
 		case TLSReloader:
 			d.tls = v
-		case DisabledSync:
+		}
+		// Satu extra bisa mengimplementasikan beberapa interface sekaligus
+		// (*proxy.Server mengimplementasikan DisabledSync DAN SiteReloader).
+		// Type switch di atas hanya mengambil case pertama yang cocok,
+		// sehingga kedua interface dicek independen di sini.
+		if v, ok := e.(DisabledSync); ok {
 			d.disSync = v
-		case SiteReloader:
+		}
+		if v, ok := e.(SiteReloader); ok {
 			d.siteRel = v
 		}
 	}
@@ -227,6 +233,8 @@ func (d *Dashboard) Handler() http.Handler {
 	// GET privat.
 	mux.HandleFunc("GET /api/stats", g(d.handleStats))
 	mux.HandleFunc("GET /api/requests", g(d.handleRequests))
+	mux.HandleFunc("GET /api/requests/{id}", g(d.handleRequestGet))
+	mux.HandleFunc("POST /api/requests/{id}/analyze", g(d.handleRequestAnalyze))
 	mux.HandleFunc("GET /api/agent-runs", g(d.handleAgentRuns))
 	mux.HandleFunc("GET /api/proposed", g(d.handleProposed))
 	mux.HandleFunc("GET /api/agent/test", g(d.handleAgentTest))
@@ -730,6 +738,121 @@ func (d *Dashboard) handleRequests(w http.ResponseWriter, r *http.Request) {
 		rows = []map[string]any{}
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+// handleRequestGet: GET /api/requests/{id} — detail satu log request
+// (termasuk header & body untuk tampilan forensik).
+func (d *Dashboard) handleRequestGet(w http.ResponseWriter, r *http.Request) {
+	row, err := d.store.GetRequest(r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "log tidak ditemukan")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	row["ai_ready"] = d.orch.LLMAvailable()
+	writeJSON(w, http.StatusOK, row)
+}
+
+// handleRequestAnalyze: POST /api/requests/{id}/analyze — analisis AI
+// general atas satu log request (tombol "AI Analysis"). Bila jenis serangan
+// belum tercakup signature yang ada, LLM diminta mengusulkan rule baru yang
+// masuk ke antrean usulan (menunggu persetujuan di halaman Rules).
+func (d *Dashboard) handleRequestAnalyze(w http.ResponseWriter, r *http.Request) {
+	reqID := r.PathValue("id")
+	row, err := d.store.GetRequest(reqID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "log tidak ditemukan")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Cek cakupan: putar ulang request lewat engine signature.
+	coveredBy := coverageRuleID(d.eng, row)
+	analysis, suggested, err := d.orch.ExplainAttack(row, coveredBy == "")
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "AI analysis gagal: "+err.Error())
+		return
+	}
+	ruleInfo := map[string]any{"status": "none"}
+	if coveredBy != "" {
+		ruleInfo = map[string]any{"status": "covered", "by": coveredBy}
+	} else if proposed := proposeAnalysisRule(d, reqID, suggested); proposed != nil {
+		ruleInfo = proposed
+	}
+	writeOK(w, map[string]any{"analysis": analysis, "rule": ruleInfo})
+}
+
+// coverageRuleID memutar ulang request dari baris log lewat engine dan
+// mengembalikan ID rule pertama yang cocok ("" bila tak tercakup).
+func coverageRuleID(eng *rules.Engine, row map[string]any) string {
+	str := func(k string) string {
+		if v, ok := row[k]; ok && v != nil {
+			return fmt.Sprint(v)
+		}
+		return ""
+	}
+	headers := map[string]string{}
+	if h := str("headers"); h != "" {
+		_ = json.Unmarshal([]byte(h), &headers)
+	}
+	req := rules.Request{
+		Method:   str("method"),
+		Path:     str("path"),
+		Query:    str("query"),
+		Headers:  headers,
+		Body:     []byte(str("body")),
+		ClientIP: str("ip"),
+	}
+	tr := eng.Triage(&req)
+	if len(tr.Hits) > 0 {
+		return tr.Hits[0].RuleID
+	}
+	return ""
+}
+
+// proposeAnalysisRule memvalidasi usulan rule dari LLM, menghindari duplikat
+// antrean, lalu menyimpannya sebagai usulan "ai-analysis". Mengembalikan info
+// untuk respons JSON, atau nil bila tidak ada usulan valid.
+func proposeAnalysisRule(d *Dashboard, reqID string, suggested map[string]any) map[string]any {
+	if suggested == nil {
+		return nil
+	}
+	rule := learner.NormalizeRule(suggested)
+	if rule == nil {
+		return nil
+	}
+	pattern, _ := rule["pattern"].(string)
+	id, _ := rule["id"].(string)
+	pending, err := d.store.ListProposed("pending")
+	if err == nil {
+		for _, p := range pending {
+			pr, _ := p["rule"].(map[string]any)
+			if pr == nil {
+				continue
+			}
+			if fmt.Sprint(pr["pattern"]) == pattern || fmt.Sprint(pr["id"]) == id {
+				return map[string]any{"status": "proposed", "id": id,
+					"name": fmt.Sprint(rule["name"]), "duplicate": true}
+			}
+		}
+	}
+	pid, err := d.store.ProposeRule(rule, "ai-analysis", "dari AI Analysis log "+reqID)
+	if err != nil {
+		return nil
+	}
+	autoApproved := false
+	if d.cfg.Learning.AutoApprove {
+		if _, ok, _ := learner.Approve(d.store, pid); ok {
+			autoApproved = true
+		}
+	}
+	return map[string]any{"status": "proposed", "id": id,
+		"name": fmt.Sprint(rule["name"]), "auto_approved": autoApproved}
 }
 
 // handleAgentRuns: GET /api/agent-runs?limit= — riwayat penalaran AI.
