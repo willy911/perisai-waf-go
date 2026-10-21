@@ -54,16 +54,18 @@ agent:
   backend: "systemone"       # auto | heuristic | llm | systemone (default: systemone)
   min_confidence: 0.55
   llm:
-    # --- Opsi A: 9Router lokal (default port 20127 atau 20128, cek dashboard 9Router-mu) ---
-    base_url: "http://127.0.0.1:20127/v1"
-    # --- Opsi B: 9Router Cloud ---
+    # --- Opsi A: 9Router (default) ---
+    base_url: "https://ai.skyzo.biz.id/v1"
+    # --- Opsi B: 9Router lokal (default port 20127 atau 20128, cek dashboard 9Router-mu) ---
+    # base_url: "http://127.0.0.1:20127/v1"
+    # --- Opsi C: 9Router Cloud ---
     # base_url: "https://9router.com/v1"
-    # --- Opsi C: Ollama lokal ---
+    # --- Opsi D: Ollama lokal ---
     # base_url: "http://127.0.0.1:11434/v1"
-    # --- Opsi D: OpenAI ---
+    # --- Opsi E: OpenAI ---
     # base_url: "https://api.openai.com/v1"
     api_key: ""              # API key dari dashboard 9Router (atau isi via env PERISAI_LLM_KEY)
-    model: "cc/claude-sonnet-4-20250514"  # nama model di 9Router, mis: cx/deepseek-chat, glm/glm-4-flash
+    model: "bansos-mochin/deepseek-v4.1-flash"  # default; lihat daftar via "Ambil daftar model" di dashboard
     timeout: 20
   systemone:
     # Keputusan cepat non-autoregresif via protokol /v1/systemone (Noul =

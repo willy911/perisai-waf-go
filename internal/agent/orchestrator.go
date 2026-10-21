@@ -209,3 +209,14 @@ func (o *Orchestrator) logRun(r *rules.Request, v Verdict) error {
 		reasoning, indicators, v.DurationMs)
 	return err
 }
+
+// ExplainAttack memakai backend LLM general (bukan untuk triase) untuk
+// analisis forensik satu request log — tombol "AI Analysis" di dashboard.
+func (o *Orchestrator) ExplainAttack(detail map[string]any, suggestRule bool) (string, map[string]any, error) {
+	return o.llm.ExplainAttack(detail, suggestRule)
+}
+
+// LLMAvailable melaporkan apakah AI general terkonfigurasi.
+func (o *Orchestrator) LLMAvailable() bool {
+	return o.llm.Available()
+}

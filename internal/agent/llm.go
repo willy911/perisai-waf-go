@@ -218,8 +218,20 @@ func (b *LLMBackend) post(messages []map[string]string, maxTokens int, timeoutSe
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, potongRune(strings.TrimSpace(string(body)), 300))
 	}
 	var data map[string]any
-	if err := json.Unmarshal(body, &data); err != nil {
+	// Decode (bukan Unmarshal): router ini menempelkan trailer SSE
+	// "data: [DONE]" setelah JSON — Decode hanya membaca satu nilai
+	// JSON pertama dan mengabaikan sisanya.
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&data); err != nil {
 		return "", fmt.Errorf("respons LLM bukan JSON: %w", err)
+	}
+	// Router zkyzo/skyzo membungkus respons chat dalam {"data": {...}};
+	// buka bungkusnya bila format standar (choices di top-level) tak ada.
+	if _, ok := data["choices"]; !ok {
+		if inner, ok := data["data"].(map[string]any); ok {
+			if _, has := inner["choices"]; has {
+				data = inner
+			}
+		}
 	}
 	choices, _ := data["choices"].([]any)
 	if len(choices) == 0 {
@@ -316,4 +328,103 @@ func (b *LLMBackend) Analyze(r *rules.Request, t rules.TriageResult) (Verdict, e
 		SuggestedRule: suggested,
 		Backend:       "llm",
 	}, nil
+}
+
+// ExplainAttack memakai AI general (bukan untuk triase) untuk menjelaskan
+// satu request yang tercatat di log — dipakai tombol "AI Analysis" di
+// dialog detail log dashboard. Bila suggestRule true, LLM juga diminta
+// mengusulkan signature deteksi (JSON setelah penanda ---RULE---) yang
+// dikembalikan sebagai map (nil bila tidak ada/tidak valid).
+// Mengembalikan teks analisis Bahasa Indonesia.
+func (b *LLMBackend) ExplainAttack(detail map[string]any, suggestRule bool) (string, map[string]any, error) {
+	if !b.Available() {
+		return "", nil, fmt.Errorf("AI general belum dikonfigurasi (isi base_url di Pengaturan AI)")
+	}
+	str := func(k string) string {
+		if v, ok := detail[k]; ok && v != nil {
+			return fmt.Sprint(v)
+		}
+		return "-"
+	}
+	var sb strings.Builder
+	sb.WriteString("Kamu adalah analis keamanan web. Jelaskan temuan WAF berikut dalam Bahasa Indonesia yang ringkas dan praktis.\n\n")
+	sb.WriteString("DATA REQUEST:\n")
+	fmt.Fprintf(&sb, "- Waktu: %s\n", str("ts"))
+	fmt.Fprintf(&sb, "- IP penyerang: %s\n", str("ip"))
+	fmt.Fprintf(&sb, "- Method: %s\n", str("method"))
+	fmt.Fprintf(&sb, "- Path: %s\n", potongRune(str("path"), 500))
+	fmt.Fprintf(&sb, "- Query: %s\n", potongRune(str("query"), 1000))
+	fmt.Fprintf(&sb, "- Header: %s\n", potongRune(str("headers"), 1500))
+	fmt.Fprintf(&sb, "- Body: %s\n", potongRune(str("body"), 1500))
+	fmt.Fprintf(&sb, "- Keputusan WAF: %s\n", str("decision"))
+	fmt.Fprintf(&sb, "- Aturan pemicu: %s (skor %.0f)\n", str("top_rule"), toFloat64(detail["score"]))
+	sb.WriteString("\nJawab dengan format:\n")
+	sb.WriteString("1. Jenis serangan: (nama + satu kalimat penjelasan)\n")
+	sb.WriteString("2. Cara kerja payload: (jelaskan bagian berbahaya dari request di atas)\n")
+	sb.WriteString("3. Tingkat bahaya: Rendah/Sedang/Tinggi/Kritis + alasan singkat\n")
+	sb.WriteString("4. Saran: (satu-dua langkah mitigasi untuk pemilik situs)\n")
+	sb.WriteString("Maksimal 250 kata. Jangan mengulang data mentah.")
+	if suggestRule {
+		sb.WriteString("\n\nSetelah analisis, tambahkan persis satu blok deteksi tanpa penjelasan tambahan:\n")
+		sb.WriteString("---RULE---\n")
+		sb.WriteString(`{"id": "AI-<TIPE>-<YYYYMMDD>", "name": "<nama serangan>", "category": "<kategori>", "severity": "high", "pattern": "<regex Go/RE2 yang mendeteksi payload di atas>"}`)
+		sb.WriteString("\nKategori pilih dari: xss, sqli, rce, lfi, ssrf, traversal, scanner, anomaly.")
+		sb.WriteString(" Pattern harus spesifik untuk serangan ini, bukan pola generik.")
+	}
+	content, err := b.post([]map[string]string{
+		{"role": "user", "content": sb.String()},
+	}, 700, 30)
+	if err != nil {
+		return "", nil, err
+	}
+	content = strings.TrimSpace(content)
+	suggested := parseSuggestedRule(content)
+	if suggested != nil {
+		if idx := strings.Index(content, "---RULE---"); idx >= 0 {
+			content = strings.TrimSpace(content[:idx])
+		}
+	}
+	return content, suggested, nil
+}
+
+// parseSuggestedRule mengambil blok JSON setelah penanda ---RULE--- dari
+// jawaban LLM; mengembalikan nil bila tidak ada atau tidak valid.
+func parseSuggestedRule(content string) map[string]any {
+	idx := strings.Index(content, "---RULE---")
+	if idx < 0 {
+		return nil
+	}
+	rest := content[idx+len("---RULE---"):]
+	start := strings.Index(rest, "{")
+	end := strings.LastIndex(rest, "}")
+	if start < 0 || end <= start {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(rest[start:end+1]), &m); err != nil {
+		return nil
+	}
+	if _, ok := m["pattern"].(string); !ok {
+		return nil
+	}
+	return m
+}
+
+// toFloat64 mengubah nilai any menjadi float64 (0 bila tak dikenal).
+func toFloat64(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case string:
+		var f float64
+		fmt.Sscanf(n, "%f", &f)
+		return f
+	}
+	return 0
 }

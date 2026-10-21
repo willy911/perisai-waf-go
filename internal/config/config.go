@@ -185,7 +185,7 @@ func defaultConfig() *WAFConfig {
 		Thresholds: Thresholds{AgentScore: 25, BlockScore: 60},
 		Agent: AgentConfig{
 			Backend: "systemone", MinConfidence: 0.55,
-			LLM:       LLMConfig{BaseURL: "http://127.0.0.1:11434/v1", Model: "llama3.1", Timeout: 20},
+			LLM:       LLMConfig{BaseURL: "https://ai.skyzo.biz.id/v1", Model: "bansos-mochin/deepseek-v4.1-flash", Timeout: 20},
 			SystemOne: SystemOneConfig{Enabled: true, Endpoint: "https://ai.skyzo.biz.id/v1/systemone", Model: "oc/jev-1.13-free", Timeout: 10},
 		},
 		Bot:        BotConfig{Enabled: true, ChallengeScore: 65, BlockScore: 90},
