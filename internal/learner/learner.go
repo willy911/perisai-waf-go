@@ -36,7 +36,7 @@ func MaybeLearn(store *storage.Storage, cfg config.LearningConfig, verdict agent
 	if !cfg.Enabled || verdict.SuggestedRule == nil {
 		return
 	}
-	rule := normalizeRule(verdict.SuggestedRule)
+	rule := NormalizeRule(verdict.SuggestedRule)
 	if rule == nil {
 		return // pattern tidak bisa dikompilasi
 	}
@@ -53,12 +53,12 @@ func MaybeLearn(store *storage.Storage, cfg config.LearningConfig, verdict agent
 	}
 }
 
-// normalizeRule menyalin suggested_rule agent ke bentuk kanonis
+// NormalizeRule menyalin suggested_rule agent ke bentuk kanonis
 // {"id","name","category","severity","pattern"} seperti learner.py Python,
 // dengan default severity="high" dan category="anomaly". Mengembalikan nil
 // bila pattern kosong atau tidak bisa dikompilasi case-insensitive + dotall
 // (setara re.IGNORECASE|re.DOTALL di Python).
-func normalizeRule(sr map[string]any) map[string]any {
+func NormalizeRule(sr map[string]any) map[string]any {
 	pattern := toStr(sr["pattern"])
 	if pattern == "" {
 		return nil

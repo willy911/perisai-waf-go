@@ -1159,3 +1159,194 @@ func TestSiteGeoBlock(t *testing.T) {
 		t.Fatalf("site tak ada harus 404, dapat %d", code)
 	}
 }
+
+func TestRequestDetailAndAnalyze(t *testing.T) {
+	s := newTestSetup(t, testHash(t))
+	now := float64(time.Now().UnixNano()) / 1e9
+	if err := s.d.store.LogRequest("an1", now, "6.6.6.6", "GET", "/x", "q=<script>alert(1)</script>",
+		80, "block", 0, 1.2, "XSS-001", "", `{"user-agent":"t"}`, ""); err != nil {
+		t.Fatalf("LogRequest: %v", err)
+	}
+	// Detail.
+	code, m := s.doJSON(t, "GET", "/api/requests/an1", nil, "tok-test")
+	if code != 200 {
+		t.Fatalf("detail: code=%d body=%v", code, m)
+	}
+	if m["top_rule"] != "XSS-001" || m["headers"] != `{"user-agent":"t"}` {
+		t.Fatalf("detail tak lengkap: %v", m)
+	}
+	if _, ok := m["ai_ready"]; !ok {
+		t.Fatal("detail harus memuat ai_ready")
+	}
+	code, _ = s.doJSON(t, "GET", "/api/requests/takada", nil, "tok-test")
+	if code != 404 {
+		t.Fatalf("detail tak ada harus 404, dapat %d", code)
+	}
+	// Analyze dengan LLM palsu.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		msgs, _ := payload["messages"].([]any)
+		if len(msgs) == 0 {
+			t.Error("prompt kosong")
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"1. Jenis serangan: XSS."}}]}`))
+	}))
+	defer ts.Close()
+	s.cfg.Agent.LLM.BaseURL = ts.URL
+	s.cfg.Agent.LLM.Timeout = 5
+	orch := agent.NewOrchestrator(s.cfg, s.d.store)
+	eng := s.d.eng
+	s.d = New(s.cfg, s.d.store, orch, eng, nil)
+	code, m = s.doJSON(t, "POST", "/api/requests/an1/analyze", map[string]any{}, "tok-test")
+	if code != 200 {
+		t.Fatalf("analyze: code=%d body=%v", code, m)
+	}
+	mustOK(t, m)
+	if m["analysis"] != "1. Jenis serangan: XSS." {
+		t.Fatalf("analysis = %v", m["analysis"])
+	}
+	// an1 sudah tercakup signature XSS -> status covered, tanpa usulan baru.
+	rule, _ := m["rule"].(map[string]any)
+	if rule == nil || rule["status"] != "covered" {
+		t.Fatalf("rule an1 = %v, ingin status covered", m["rule"])
+	}
+	if by, _ := rule["by"].(string); by != "XSS-001" {
+		t.Fatalf("covered by = %v, ingin XSS-001", rule["by"])
+	}
+	pending, _ := s.d.store.ListProposed("pending")
+	if len(pending) != 0 {
+		t.Fatalf("covered: usulan pending harus 0, dapat %d", len(pending))
+	}
+	code, _ = s.doJSON(t, "POST", "/api/requests/takada/analyze", map[string]any{}, "tok-test")
+	if code != 404 {
+		t.Fatalf("analyze tak ada harus 404, dapat %d", code)
+	}
+}
+
+// TestRequestAnalyzeUsulkanRule: payload yang belum tercakup signature +
+// LLM mengembalikan blok ---RULE--- valid -> usulan "ai-analysis" dibuat.
+func TestRequestAnalyzeUsulkanRule(t *testing.T) {
+	s := newTestSetup(t, testHash(t))
+	now := float64(time.Now().UnixNano()) / 1e9
+	if err := s.d.store.LogRequest("an3", now, "8.8.8.8", "GET", "/api/user",
+		"__proto__[role]=admin", 5, "allow", 0, 0.4, "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content := "1. Jenis serangan: Prototype pollution.\n---RULE---\n" +
+			`{"id": "AI-PP-20260109", "name": "Prototype pollution", "category": "anomaly", "severity": "high", "pattern": "__proto__"}`
+		resp, _ := json.Marshal(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": content}}},
+		})
+		_, _ = w.Write(resp)
+	}))
+	defer ts.Close()
+	s.cfg.Agent.LLM.BaseURL = ts.URL
+	s.cfg.Agent.LLM.Timeout = 5
+	s.d = New(s.cfg, s.d.store, agent.NewOrchestrator(s.cfg, s.d.store), s.d.eng, nil)
+
+	code, m := s.doJSON(t, "POST", "/api/requests/an3/analyze", map[string]any{}, "tok-test")
+	if code != 200 {
+		t.Fatalf("analyze: code=%d body=%v", code, m)
+	}
+	mustOK(t, m)
+	if m["analysis"] != "1. Jenis serangan: Prototype pollution." {
+		t.Fatalf("blok ---RULE--- harus dipisah dari analysis: %q", m["analysis"])
+	}
+	rule, _ := m["rule"].(map[string]any)
+	if rule == nil || rule["status"] != "proposed" {
+		t.Fatalf("rule an3 = %v, ingin status proposed", m["rule"])
+	}
+	if rule["id"] != "AI-PP-20260109" || rule["auto_approved"] != false {
+		t.Fatalf("rule an3 tak lengkap: %v", rule)
+	}
+	pending, err := s.d.store.ListProposed("pending")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending = %d err=%v, ingin 1", len(pending), err)
+	}
+	pr, _ := pending[0]["rule"].(map[string]any)
+	if pr["pattern"] != "__proto__" {
+		t.Fatalf("pattern usulan = %v", pr["pattern"])
+	}
+	// Analisis ulang request sama -> duplikat, tidak menambah antrean.
+	code, m = s.doJSON(t, "POST", "/api/requests/an3/analyze", map[string]any{}, "tok-test")
+	if code != 200 {
+		t.Fatalf("analyze ulang: code=%d", code)
+	}
+	rule, _ = m["rule"].(map[string]any)
+	if rule["status"] != "proposed" || rule["duplicate"] != true {
+		t.Fatalf("analyze ulang harus duplicate: %v", rule)
+	}
+	pending, _ = s.d.store.ListProposed("pending")
+	if len(pending) != 1 {
+		t.Fatalf("duplikat: pending harus tetap 1, dapat %d", len(pending))
+	}
+}
+
+// TestRequestAnalyzeTanpaUsulan: payload tak tercakup tapi LLM tidak memberi
+// blok ---RULE--- -> status none, tanpa usulan.
+func TestRequestAnalyzeTanpaUsulan(t *testing.T) {
+	s := newTestSetup(t, testHash(t))
+	now := float64(time.Now().UnixNano()) / 1e9
+	if err := s.d.store.LogRequest("an4", now, "9.9.9.9", "GET", "/api/user",
+		"__proto__[role]=admin", 5, "allow", 0, 0.4, "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp, _ := json.Marshal(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "1. Jenis serangan: tidak jelas."}}},
+		})
+		_, _ = w.Write(resp)
+	}))
+	defer ts.Close()
+	s.cfg.Agent.LLM.BaseURL = ts.URL
+	s.cfg.Agent.LLM.Timeout = 5
+	s.d = New(s.cfg, s.d.store, agent.NewOrchestrator(s.cfg, s.d.store), s.d.eng, nil)
+
+	code, m := s.doJSON(t, "POST", "/api/requests/an4/analyze", map[string]any{}, "tok-test")
+	if code != 200 {
+		t.Fatalf("analyze: code=%d body=%v", code, m)
+	}
+	rule, _ := m["rule"].(map[string]any)
+	if rule == nil || rule["status"] != "none" {
+		t.Fatalf("rule an4 = %v, ingin status none", m["rule"])
+	}
+	pending, _ := s.d.store.ListProposed("pending")
+	if len(pending) != 0 {
+		t.Fatalf("tanpa usulan: pending harus 0, dapat %d", len(pending))
+	}
+}
+
+func TestRequestAnalyzeTanpaLLM(t *testing.T) {
+	s := newTestSetup(t, testHash(t))
+	now := float64(time.Now().UnixNano()) / 1e9
+	if err := s.d.store.LogRequest("an2", now, "7.7.7.7", "GET", "/y", "",
+		10, "allow", 0, 0.5, "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// LLM default testSetup mengarah ke 127.0.0.1:20127 (tak ada) -> 502.
+	code, m := s.doJSON(t, "POST", "/api/requests/an2/analyze", map[string]any{}, "tok-test")
+	if code != 502 {
+		t.Fatalf("tanpa LLM harus 502, dapat %d body=%v", code, m)
+	}
+}
+
+// fakeBothReloader mengimplementasikan DisabledSync DAN SiteReloader
+// seperti *proxy.Server — regresi bug type switch yang hanya mengassign
+// interface pertama yang cocok.
+type fakeBothReloader struct{}
+
+func (fakeBothReloader) SetRuleDisabled(string, bool) bool { return true }
+func (fakeBothReloader) ReloadSites() error                 { return nil }
+
+func TestNewAssignsBothInterfaces(t *testing.T) {
+	s := newTestSetup(t, testHash(t))
+	d2 := New(s.cfg, s.d.store, s.d.orch, s.d.eng, nil, fakeBothReloader{})
+	if d2.disSync == nil {
+		t.Fatal("DisabledSync tidak ter-assign")
+	}
+	if d2.siteRel == nil {
+		t.Fatal("SiteReloader tidak ter-assign (bug type switch: hanya case pertama yang diambil)")
+	}
+}
