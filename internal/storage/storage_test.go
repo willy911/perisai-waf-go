@@ -182,7 +182,7 @@ func TestLogRequestRecentStats(t *testing.T) {
 	}
 	for _, l := range logs {
 		if err := s.LogRequest(l.id, now, l.ip, "GET", "/x", "q=1",
-			0, l.decision, 0, 1.5, l.rule, l.site); err != nil {
+			0, l.decision, 0, 1.5, l.rule, l.site, `{"user-agent":"t"}`, ""); err != nil {
 			t.Fatalf("LogRequest: %v", err)
 		}
 	}
@@ -200,7 +200,7 @@ func TestLogRequestRecentStats(t *testing.T) {
 		longStr += "a"
 	}
 	if err := s.LogRequest("rlong", now, "9.9.9.9", "GET", longStr, longStr,
-		0, "allow", 0, 1, "", ""); err != nil {
+		0, "allow", 0, 1, "", "", "", ""); err != nil {
 		t.Fatalf("LogRequest long: %v", err)
 	}
 	recent, _ = s.RecentRequests(1, "")
@@ -580,5 +580,31 @@ func TestDBFileCreated(t *testing.T) {
 	defer s.Close()
 	if _, err := os.Stat(filepath.Join(dir, "sub", "data", "perisai.db")); err != nil {
 		t.Errorf("perisai.db tidak dibuat: %v", err)
+	}
+}
+
+func TestGetRequest(t *testing.T) {
+	s := newTestStorage(t)
+	now := float64(time.Now().UnixNano()) / 1e9
+	hdr := `{"user-agent":"curl/8.0","accept":"*/*"}`
+	if err := s.LogRequest("g1", now, "5.5.5.5", "POST", "/login", "x=1",
+		75, "block", 0.9, 2.5, "SQLI-001", "s1", hdr, "user=admin"); err != nil {
+		t.Fatalf("LogRequest: %v", err)
+	}
+	got, err := s.GetRequest("g1")
+	if err != nil {
+		t.Fatalf("GetRequest: %v", err)
+	}
+	if got["top_rule"] != "SQLI-001" || got["decision"] != "block" {
+		t.Fatalf("kolom tidak cocok: %v", got)
+	}
+	if toString(got["headers"], "") != hdr {
+		t.Fatalf("headers = %v", got["headers"])
+	}
+	if toString(got["body"], "") != "user=admin" {
+		t.Fatalf("body = %v", got["body"])
+	}
+	if _, err := s.GetRequest("takada"); err == nil {
+		t.Fatal("GetRequest tak ada harus error")
 	}
 }

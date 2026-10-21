@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import { apiGet } from "$lib/api.js";
+	import { apiGet, apiPost } from "$lib/api.js";
 	import { toast } from "$lib/stores.js";
 	import { fmtTime } from "$lib/utils.js";
 	import type { WafRequest } from "$lib/types.js";
@@ -25,11 +25,70 @@
 	} from "$lib/components/ui/table/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import { RefreshCw } from "lucide-svelte";
+	import {
+		Dialog,
+		DialogContent,
+		DialogHeader,
+		DialogTitle,
+		DialogDescription,
+	} from "$lib/components/ui/dialog/index.js";
 
 	let rows = $state<WafRequest[]>([]);
 	let loading = $state(false);
 	let filterDecision = $state("all");
 	let search = $state("");
+
+	// dialog detail + AI analysis
+	let detailOpen = $state(false);
+	let detail = $state<WafRequest | null>(null);
+	let detailLoading = $state(false);
+	let analysis = $state("");
+	let analyzing = $state(false);
+	let analysisErr = $state("");
+	let ruleStatus = $state<{ status: string; by?: string; id?: string; name?: string; auto_approved?: boolean; duplicate?: boolean } | null>(null);
+
+	async function openDetail(r: WafRequest) {
+		detail = null;
+		analysis = "";
+		analysisErr = "";
+		ruleStatus = null;
+		detailLoading = true;
+		detailOpen = true;
+		try {
+			detail = await apiGet<WafRequest>(`/api/requests/${r.id}`);
+		} catch {
+			toast("Gagal memuat detail log", { variant: "destructive" });
+			detailOpen = false;
+		} finally {
+			detailLoading = false;
+		}
+	}
+
+	async function runAnalysis() {
+		if (!detail || analyzing) return;
+		analyzing = true;
+		analysisErr = "";
+		try {
+			const res = await apiPost<{ analysis: string; rule?: typeof ruleStatus }>(
+				`/api/requests/${detail.id}/analyze`, {});
+			analysis = res.analysis;
+			ruleStatus = res.rule ?? null;
+		} catch (e) {
+			analysisErr = e instanceof Error ? e.message : "gagal";
+		} finally {
+			analyzing = false;
+		}
+	}
+
+	function rawRequest(d: WafRequest): string {
+		const lines = [`${d.method} ${d.path}${d.query ? "?" + d.query : ""} HTTP/1.1`];
+		try {
+			const h = JSON.parse(d.headers || "{}");
+			for (const [k, v] of Object.entries(h)) lines.push(`${k}: ${v}`);
+		} catch { /* abaikan */ }
+		if (d.body) lines.push("", d.body);
+		return lines.join("\n");
+	}
 
 	async function load() {
 		loading = true;
@@ -114,7 +173,7 @@
 				</TableHeader>
 				<TableBody>
 					{#each filtered as r (r.id)}
-						<TableRow>
+						<TableRow class="cursor-pointer hover:bg-muted/50" onclick={() => openDetail(r)}>
 							<TableCell class="whitespace-nowrap text-muted-foreground">{fmtTime(r.ts)}</TableCell>
 							<TableCell><code class="rounded bg-input px-1 text-xs">{r.ip}</code></TableCell>
 							<TableCell class="max-w-md">
@@ -139,3 +198,79 @@
 		</CardContent>
 	</Card>
 </div>
+
+<!-- dialog detail log + AI analysis -->
+<Dialog bind:open={detailOpen}>
+	<DialogContent class="max-h-[90vh] max-w-3xl overflow-y-auto">
+		<DialogHeader>
+			<DialogTitle class="flex items-center gap-2">
+				{#if detail}
+					<Badge variant={badgeVariant(detail.decision)}>{detail.decision}</Badge>
+					<span class="font-mono text-sm font-normal">{detail.method} {detail.path}</span>
+				{:else}
+					Detail log
+				{/if}
+			</DialogTitle>
+			<DialogDescription>Klik baris log untuk melihat detail forensik request.</DialogDescription>
+		</DialogHeader>
+		{#if detailLoading}
+			<p class="py-8 text-center text-sm text-muted-foreground">Memuat…</p>
+		{:else if detail}
+			<div class="space-y-4">
+				<dl class="grid grid-cols-[110px_1fr] gap-x-3 gap-y-2 text-sm">
+					<dt class="text-muted-foreground">Attack IP</dt>
+					<dd><code class="rounded bg-input px-1 font-mono text-xs">{detail.ip}</code></dd>
+					<dt class="text-muted-foreground">Payload</dt>
+					<dd><code class="break-all rounded bg-input px-1 font-mono text-xs">{detail.query || detail.path || "-"}</code></dd>
+					<dt class="text-muted-foreground">Module</dt>
+					<dd class="font-semibold">{detail.top_rule || "-"}</dd>
+					<dt class="text-muted-foreground">Skor</dt>
+					<dd>{detail.score}</dd>
+					<dt class="text-muted-foreground">Time</dt>
+					<dd class="font-mono text-xs">{fmtTime(detail.ts)}</dd>
+					<dt class="text-muted-foreground">ID</dt>
+					<dd class="font-mono text-xs">{detail.id}</dd>
+				</dl>
+				<div>
+					<div class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Raw request</div>
+					<pre class="max-h-56 overflow-auto rounded bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{rawRequest(detail)}</pre>
+				</div>
+				<div>
+					{#if analysis}
+						<div class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Hasil AI Analysis</div>
+						<div class="rounded border border-indigo-200 bg-indigo-50 p-3 text-sm whitespace-pre-wrap dark:border-indigo-900 dark:bg-indigo-950">{analysis}</div>
+					{:else if analysisErr}
+						<p class="text-sm text-destructive">❌ {analysisErr}</p>
+					{/if}
+					{#if ruleStatus && ruleStatus.status === "covered"}
+						<p class="text-sm text-green-700 dark:text-green-400">✓ Sudah tercakup aturan <code class="font-mono">{ruleStatus.by}</code> — tidak perlu rule baru.</p>
+					{:else if ruleStatus && ruleStatus.status === "proposed"}
+						<p class="text-sm text-amber-700 dark:text-amber-400">
+							＋ Aturan baru diusulkan: <code class="font-mono">{ruleStatus.id}</code>{ruleStatus.name ? ` (${ruleStatus.name})` : ""}
+							{#if ruleStatus.duplicate}
+								(sudah ada di antrean usulan)
+							{:else if ruleStatus.auto_approved}
+								(sudah otomatis disetujui)
+							{:else}
+								— cek halaman Rules → Usulan aturan untuk menyetujui
+							{/if}
+						</p>
+					{/if}
+					<div class="mt-2 flex items-center gap-2">
+						<Button
+							onclick={runAnalysis}
+							disabled={analyzing || !detail.ai_ready}
+							class="bg-gradient-to-r from-indigo-400 to-indigo-600 text-white"
+							title={detail.ai_ready ? "Analisis serangan dengan AI" : "Isi base_url AI general di Pengaturan → AI dulu"}
+						>
+							{analyzing ? "Menganalisis…" : "✨ AI Analysis"}
+						</Button>
+						{#if !detail.ai_ready}
+							<span class="text-xs text-muted-foreground">AI general belum dikonfigurasi (Pengaturan → AI).</span>
+						{/if}
+					</div>
+				</div>
+			</div>
+		{/if}
+	</DialogContent>
+</Dialog>

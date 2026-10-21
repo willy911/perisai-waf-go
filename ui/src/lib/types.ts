@@ -22,6 +22,9 @@ export interface WafRequest {
 	duration_ms: number;
 	top_rule: string;
 	site_id: string;
+	headers?: string;
+	body?: string;
+	ai_ready?: boolean;
 }
 
 export interface AgentRun {

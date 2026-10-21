@@ -229,7 +229,7 @@
 			</div>
 			<div class="space-y-2">
 				<Label for="ai-base">Endpoint (OpenAI-compatible)</Label>
-				<Input id="ai-base" bind:value={baseUrl} placeholder="https://9router.com/v1" />
+				<Input id="ai-base" bind:value={baseUrl} placeholder="https://ai.skyzo.biz.id/v1" />
 			</div>
 			<div class="space-y-2">
 				<Label for="ai-key">API key</Label>
